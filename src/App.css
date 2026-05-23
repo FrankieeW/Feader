@@ -88,8 +88,11 @@ input:disabled {
 
 .app-shell {
   display: grid;
+  width: 100vw;
+  height: 100vh;
   min-height: 100vh;
-  grid-template-columns: minmax(220px, 260px) minmax(320px, 0.72fr) minmax(520px, 1.35fr);
+  overflow: hidden;
+  grid-template-columns: minmax(220px, 260px) minmax(360px, 0.88fr) minmax(0, 1.22fr);
   background:
     radial-gradient(circle at 18% 0, var(--color-bg-accent), transparent 34%),
     linear-gradient(180deg, var(--color-bg), var(--color-panel-muted));
@@ -443,6 +446,7 @@ input:disabled {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 14px;
+  border-right: 1px solid var(--color-border);
   overflow: hidden;
 }
 
@@ -516,9 +520,11 @@ input:disabled {
 
 .topbar {
   align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .topbar > div:first-child {
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -531,9 +537,10 @@ input:disabled {
 
 .queue-metrics {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .eyebrow {
@@ -558,7 +565,7 @@ h1 {
   font-size: 30px;
   line-height: 1.08;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 button,
@@ -746,7 +753,6 @@ input:focus-visible,
   display: grid;
   align-content: start;
   gap: 14px;
-  border-left: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--color-panel-strong) 54%, transparent);
   overflow: auto;
 }
@@ -765,9 +771,11 @@ input:focus-visible,
 }
 
 .reader-article h2 {
-  max-width: 22ch;
-  font-size: 34px;
-  line-height: 1.12;
+  max-width: 18ch;
+  font-size: clamp(28px, 2.35vw, 38px);
+  font-weight: 800;
+  line-height: 1.16;
+  text-wrap: balance;
 }
 
 .reader-actions {
@@ -780,13 +788,25 @@ input:focus-visible,
 }
 
 .reader-body {
+  width: min(100%, 68ch);
   padding-right: 4px;
+  hanging-punctuation: allow-end;
+  line-break: loose;
+  text-rendering: optimizeLegibility;
+  word-break: auto-phrase;
 }
 
 .reader-body p {
   color: var(--color-text);
-  font-size: 16px;
-  line-height: 1.78;
+  font-family:
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei",
+    ui-sans-serif, system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.92;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 .source-panel {
@@ -822,11 +842,11 @@ input:focus-visible,
 
 @media (max-width: 1160px) {
   .app-shell {
-    grid-template-columns: minmax(204px, 228px) minmax(280px, 0.68fr) minmax(430px, 1fr);
+    grid-template-columns: minmax(204px, 228px) minmax(320px, 0.82fr) minmax(0, 1fr);
   }
 
-  .reader-panel {
-    border-left: 1px solid var(--color-border);
+  .topbar-actions {
+    width: 100%;
   }
 
   .page-view {
@@ -857,6 +877,10 @@ input:focus-visible,
 
   .reader-panel {
     grid-template-columns: 1fr;
+  }
+
+  .timeline {
+    border-right: 0;
   }
 
   .reader-article {
