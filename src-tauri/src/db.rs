@@ -121,6 +121,26 @@ impl AppDatabase {
         get_source_with_connection(&connection, source_id)
     }
 
+    /// Set or clear a source's category folder. Blank/whitespace clears it.
+    pub fn set_source_category(
+        &self,
+        source_id: i64,
+        category: Option<&str>,
+    ) -> Result<Source, String> {
+        let normalized = category
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE sources SET category = ?1, updated_at = ?2 WHERE id = ?3",
+                params![normalized, now, source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        get_source_with_connection(&connection, source_id)
+    }
+
     /// Delete a source and its articles.
     pub fn delete_source(&self, source_id: i64) -> Result<(), String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
@@ -681,6 +701,24 @@ mod tests {
             .expect("articles list");
         assert_eq!(source.last_error.as_deref(), Some("network failed"));
         assert_eq!(articles.len(), 1);
+    }
+
+    #[test]
+    fn source_category_sets_and_clears() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+
+        let set = database
+            .set_source_category(source.id, Some("Dev"))
+            .expect("category sets");
+        assert_eq!(set.category.as_deref(), Some("Dev"));
+
+        let cleared = database
+            .set_source_category(source.id, Some("   "))
+            .expect("blank clears category");
+        assert_eq!(cleared.category, None);
     }
 
     #[test]

@@ -93,6 +93,16 @@ fn update_source_title(
     database.update_source_title(request.source_id, &request.title)
 }
 
+/// Set or clear a source's category folder.
+#[tauri::command]
+fn set_source_category(
+    source_id: i64,
+    category: Option<String>,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    database.set_source_category(source_id, category.as_deref())
+}
+
 /// Delete a source and all of its articles.
 #[tauri::command]
 fn delete_source(source_id: i64, database: tauri::State<'_, AppDatabase>) -> Result<(), String> {
@@ -242,6 +252,7 @@ pub fn run() {
             preview_xpath_source,
             add_xpath_source,
             update_source_title,
+            set_source_category,
             delete_source,
             refresh_source,
             refresh_all_sources,
