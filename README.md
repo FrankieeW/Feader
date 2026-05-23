@@ -43,7 +43,7 @@ Core goals:
 ### Plugin System
 
 - Native RSS and Atom support for standard feeds
-- Declarative XPath extraction for simple HTML or XML sources
+- Declarative XPath extraction for simple static HTML or XML sources
 - Script-based plugins for complex websites that need custom fetching, parsing, login handling, pagination, or anti-fragile extraction logic
 - AI-assisted rule authoring so users can ask Feader to inspect a page and fill XPath selectors for title, link, date, author, content, and next-page fields
 - A shared article output contract so RSS, XPath rules, and scripts all feed the same reading pipeline

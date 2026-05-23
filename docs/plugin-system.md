@@ -17,7 +17,7 @@ Feader should treat RSS as the best path, not the only path. Many useful sources
 
 Use for standard RSS, Atom, JSON Feed, and OPML workflows.
 
-Implementation status: RSS and Atom parsing are the first live adapter path, with source management and refresh error tracking backed by SQLite. JSON Feed and OPML remain follow-up work.
+Implementation status: RSS and Atom parsing are live, with source management and refresh error tracking backed by SQLite. JSON Feed and OPML remain follow-up work.
 
 Responsibilities:
 
@@ -43,6 +43,8 @@ The user or AI defines XPath expressions for fields such as:
 - Next page
 
 The rule should be stored as data, not code. This makes it inspectable, exportable, syncable, and safer than arbitrary scripts.
+
+Implementation status: static, well-formed HTML/XML pages can be previewed, saved, refreshed, and normalized into Feader articles. JavaScript-rendered pages, authentication, pagination traversal, and AI-assisted selector generation remain follow-up work.
 
 Example shape:
 
