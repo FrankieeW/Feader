@@ -47,7 +47,7 @@
 - Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and resizable sidebar/timeline splitters with persisted widths.
 - Shape/radius/elevation: medium-radius (12-14px) panels, subtle borders, no nested decorative cards.
 - Motion: minimal; hover/focus state only unless future settings allow reduced motion handling.
-- Imagery/iconography: no stock imagery; use text labels until an icon system is intentionally adopted.
+- Imagery/iconography: no stock imagery; the icon rail uses a minimal hand-authored inline SVG set, while the rest of the app stays text-labeled unless another icon system is intentionally adopted.
 
 ## Components
 - Existing components to reuse: source rail, source mode selector, article card, filter tabs, reader panel, source panel, theme segmented control.

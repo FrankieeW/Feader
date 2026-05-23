@@ -101,6 +101,7 @@ const entryLayoutStorageKey = "feader.entryLayout";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
 const feedGroupStorageKey = "feader.feedGroups";
+const categoryDatalistId = "feader-category-options";
 const builtInTestFeedUrl = "https://www.appinn.com/feed/";
 const defaultPaneWidths: PaneWidths = {
   sidebar: 240,
@@ -768,6 +769,11 @@ function App() {
         themeMode={themeMode}
         onCycleTheme={() => setThemeMode((mode) => nextThemeMode(mode))}
       />
+      <datalist id={categoryDatalistId}>
+        {categoryOptions.map((category) => (
+          <option key={category} value={category} />
+        ))}
+      </datalist>
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="brand">
@@ -1045,7 +1051,6 @@ function App() {
             <>
               <SourceHealthStrip source={selectedSource} />
               <CategoryPicker
-                categories={categoryOptions}
                 disabled={isBusy}
                 onSubmit={(id, category) => void handleSetCategory(id, category)}
                 source={selectedSource}
@@ -1188,7 +1193,6 @@ function App() {
                   </div>
                   <SourceHealthStrip source={source} />
                   <CategoryPicker
-                    categories={categoryOptions}
                     disabled={isBusy}
                     onSubmit={(id, category) => void handleSetCategory(id, category)}
                     source={source}
@@ -1441,12 +1445,10 @@ function EntryLayoutControl({
 
 function CategoryPicker({
   source,
-  categories,
   disabled,
   onSubmit,
 }: {
   source: Source;
-  categories: string[];
   disabled: boolean;
   onSubmit: (sourceId: number, category: string) => void;
 }) {
@@ -1466,16 +1468,11 @@ function CategoryPicker({
       <input
         aria-label="Source category"
         disabled={disabled}
-        list="feader-category-options"
+        list={categoryDatalistId}
         onChange={(event) => setValue(event.currentTarget.value)}
         placeholder="Category"
         value={value}
       />
-      <datalist id="feader-category-options">
-        {categories.map((category) => (
-          <option key={category} value={category} />
-        ))}
-      </datalist>
       <button disabled={disabled} type="submit">
         Set
       </button>

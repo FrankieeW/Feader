@@ -1053,6 +1053,10 @@ input:focus-visible,
   column-gap: 12px;
 }
 
+.story-list.card .story-card::before {
+  display: none;
+}
+
 .story-thumb {
   grid-area: thumb;
   width: 56px;

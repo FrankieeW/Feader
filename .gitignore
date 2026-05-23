@@ -55,6 +55,6 @@ pnpm-debug.log*
 # Visual brainstorm companion
 .superpowers/
 
-#AI 
-.omx/ 
+# AI
+.omx/
 .omc/
