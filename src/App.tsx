@@ -635,6 +635,38 @@ function App() {
     });
   }
 
+  async function handleRenameSourceId(sourceId: number, title: string): Promise<void> {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      return;
+    }
+    await runTask("Renaming feed", async () => {
+      await invoke<Source>("update_source_title", {
+        request: { sourceId, title: nextTitle },
+      });
+      await loadData(selectedSourceId, filterMode, selectedArticleId);
+      setStatus("Feed renamed");
+    });
+  }
+
+  async function handleDeleteSourceId(sourceId: number, title: string): Promise<void> {
+    const confirmed = window.confirm(`Delete "${title}" and its articles?`);
+    if (!confirmed) {
+      return;
+    }
+    await runTask("Deleting feed", async () => {
+      await invoke("delete_source", { sourceId });
+      if (selectedSourceId === sourceId) {
+        setSelectedSourceId(undefined);
+        setSelectedArticleId(undefined);
+        await loadData(undefined, filterMode, undefined);
+      } else {
+        await loadData(selectedSourceId, filterMode, selectedArticleId);
+      }
+      setStatus("Feed deleted");
+    });
+  }
+
   async function handleMarkAllRead(): Promise<void> {
     await runTask("Marking articles read", async () => {
       const changed = await invoke<number>("mark_articles_read", {
@@ -1156,6 +1188,12 @@ function App() {
                     onSubmit={(id, category) => void handleSetCategory(id, category)}
                     source={source}
                   />
+                  <SourceCardManage
+                    disabled={isBusy}
+                    onDelete={(id, title) => void handleDeleteSourceId(id, title)}
+                    onRename={(id, title) => void handleRenameSourceId(id, title)}
+                    source={source}
+                  />
                   <dl>
                     <dt>Kind</dt>
                     <dd>{source.kind}</dd>
@@ -1436,6 +1474,51 @@ function CategoryPicker({
         Set
       </button>
     </form>
+  );
+}
+
+function SourceCardManage({
+  source,
+  disabled,
+  onRename,
+  onDelete,
+}: {
+  source: Source;
+  disabled: boolean;
+  onRename: (sourceId: number, title: string) => void;
+  onDelete: (sourceId: number, title: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  return (
+    <>
+      <form
+        className="rename-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onRename(source.id, title || source.title);
+          setTitle("");
+        }}
+      >
+        <input
+          aria-label={`Rename ${source.title}`}
+          disabled={disabled}
+          onChange={(event) => setTitle(event.currentTarget.value)}
+          placeholder={source.title}
+          value={title}
+        />
+        <button disabled={disabled} type="submit">
+          Rename
+        </button>
+      </form>
+      <button
+        className="danger-action"
+        disabled={disabled}
+        onClick={() => onDelete(source.id, source.title)}
+        type="button"
+      >
+        Delete feed
+      </button>
+    </>
   );
 }
 
