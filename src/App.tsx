@@ -56,7 +56,7 @@ type FilterMode = "all" | "unread" | "saved";
 type SourceInputMode = "rss" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
 type ViewMode = "reader" | "sources" | "settings";
-type ArticleDensity = "comfortable" | "compact";
+type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type PaneKey = "sidebar" | "timeline";
 
@@ -97,7 +97,7 @@ const defaultXPathSelectors: XPathSelectors = {
 };
 
 const themeStorageKey = "feader.theme";
-const densityStorageKey = "feader.articleDensity";
+const entryLayoutStorageKey = "feader.entryLayout";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
 const feedGroupStorageKey = "feader.feedGroups";
@@ -417,9 +417,7 @@ function App() {
   const [activeView, setActiveView] = useState<ViewMode>("reader");
   const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
-  const [articleDensity, setArticleDensity] = useState<ArticleDensity>(() =>
-    readInitialArticleDensity(),
-  );
+  const [entryLayout, setEntryLayout] = useState<EntryLayout>(() => readInitialEntryLayout());
   const [readerTypography, setReaderTypography] = useState<ReaderTypography>(() =>
     readInitialReaderTypography(),
   );
@@ -443,6 +441,17 @@ function App() {
   const unreadCount = sources.reduce((total, source) => total + source.unreadCount, 0);
   const failedSourceCount = sources.filter((source) => source.lastError).length;
   const selectedSourceHealth = selectedSource ? sourceHealth(selectedSource) : "Mixed";
+  const categoryOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          sources
+            .map((source) => source.category?.trim())
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ].sort(),
+    [sources],
+  );
 
   useEffect(() => {
     void loadData();
@@ -463,8 +472,8 @@ function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    localStorage.setItem(densityStorageKey, articleDensity);
-  }, [articleDensity]);
+    localStorage.setItem(entryLayoutStorageKey, entryLayout);
+  }, [entryLayout]);
 
   useEffect(() => {
     localStorage.setItem(readerTypographyStorageKey, readerTypography);
@@ -599,6 +608,14 @@ function App() {
     });
   }
 
+  async function handleSetCategory(sourceId: number, category: string): Promise<void> {
+    await runTask("Updating category", async () => {
+      await invoke<Source>("set_source_category", { sourceId, category });
+      await loadData(selectedSourceId, filterMode, selectedArticleId);
+      setStatus("Category updated");
+    });
+  }
+
   async function handleDeleteSource(): Promise<void> {
     if (!selectedSource) {
       return;
@@ -716,9 +733,9 @@ function App() {
 
   function handleResetWorkspaceLayout(): void {
     setPaneWidths(defaultPaneWidths);
-    setArticleDensity("comfortable");
+    setEntryLayout("list");
     localStorage.removeItem(paneStorageKey);
-    localStorage.removeItem(densityStorageKey);
+    localStorage.removeItem(entryLayoutStorageKey);
   }
 
   async function runTask(label: string, task: () => Promise<void>): Promise<void> {
@@ -896,11 +913,11 @@ function App() {
               </button>
             ))}
           </div>
-          <DensityControl density={articleDensity} onChange={setArticleDensity} />
+          <EntryLayoutControl layout={entryLayout} onChange={setEntryLayout} />
           <div className="status-line">{status}</div>
         </div>
 
-        <div className={`story-list ${articleDensity}`}>
+        <div className={`story-list ${entryLayout}`}>
           {articles.length === 0 ? (
             <section className="empty-state">
               <h2>No articles</h2>
@@ -918,6 +935,14 @@ function App() {
                 role="button"
                 tabIndex={0}
               >
+                {entryLayout === "card" ? (
+                  <div
+                    className="story-thumb"
+                    style={
+                      article.imageUrl ? { backgroundImage: `url(${article.imageUrl})` } : undefined
+                    }
+                  />
+                ) : null}
                 <div className="story-state">
                   <span className={article.read ? "read-dot" : "unread-dot"} />
                   {article.saved ? <span className="saved-chip">Saved</span> : null}
@@ -1019,6 +1044,12 @@ function App() {
           {selectedSource ? (
             <>
               <SourceHealthStrip source={selectedSource} />
+              <CategoryPicker
+                categories={categoryOptions}
+                disabled={isBusy}
+                onSubmit={(id, category) => void handleSetCategory(id, category)}
+                source={selectedSource}
+              />
               <form className="rename-form" onSubmit={handleRenameSource}>
                 <input
                   aria-label="Source title"
@@ -1156,6 +1187,12 @@ function App() {
                     <span>{sourceHealth(source)}</span>
                   </div>
                   <SourceHealthStrip source={source} />
+                  <CategoryPicker
+                    categories={categoryOptions}
+                    disabled={isBusy}
+                    onSubmit={(id, category) => void handleSetCategory(id, category)}
+                    source={source}
+                  />
                   <dl>
                     <dt>Kind</dt>
                     <dd>{source.kind}</dd>
@@ -1220,9 +1257,9 @@ function App() {
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Workspace</span>
-                <span>{articleDensityLabel(articleDensity)}</span>
+                <span>{entryLayoutLabel(entryLayout)}</span>
               </div>
-              <DensityControl density={articleDensity} onChange={setArticleDensity} />
+              <EntryLayoutControl layout={entryLayout} onChange={setEntryLayout} />
               <dl>
                 <dt>Sources</dt>
                 <dd>{sources.length}</dd>
@@ -1378,26 +1415,71 @@ function ThemeControl({
   );
 }
 
-function DensityControl({
-  density,
+function EntryLayoutControl({
+  layout,
   onChange,
 }: {
-  density: ArticleDensity;
-  onChange: (density: ArticleDensity) => void;
+  layout: EntryLayout;
+  onChange: (layout: EntryLayout) => void;
 }) {
   return (
-    <div className="density-control" role="group" aria-label="Article density">
-      {(["comfortable", "compact"] as const).map((nextDensity) => (
+    <div className="entry-layout-control" role="group" aria-label="Entry layout">
+      {(["list", "card"] as const).map((next) => (
         <button
-          className={density === nextDensity ? "active" : ""}
-          key={nextDensity}
-          onClick={() => onChange(nextDensity)}
+          aria-pressed={layout === next}
+          className={layout === next ? "active" : ""}
+          key={next}
+          onClick={() => onChange(next)}
           type="button"
         >
-          {articleDensityLabel(nextDensity)}
+          {entryLayoutLabel(next)}
         </button>
       ))}
     </div>
+  );
+}
+
+function CategoryPicker({
+  source,
+  categories,
+  disabled,
+  onSubmit,
+}: {
+  source: Source;
+  categories: string[];
+  disabled: boolean;
+  onSubmit: (sourceId: number, category: string) => void;
+}) {
+  const [value, setValue] = useState(source.category ?? "");
+  useEffect(() => {
+    setValue(source.category ?? "");
+  }, [source.id, source.category]);
+
+  return (
+    <form
+      className="category-picker"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(source.id, value);
+      }}
+    >
+      <input
+        aria-label="Source category"
+        disabled={disabled}
+        list="feader-category-options"
+        onChange={(event) => setValue(event.currentTarget.value)}
+        placeholder="Category"
+        value={value}
+      />
+      <datalist id="feader-category-options">
+        {categories.map((category) => (
+          <option key={category} value={category} />
+        ))}
+      </datalist>
+      <button disabled={disabled} type="submit">
+        Set
+      </button>
+    </form>
   );
 }
 
@@ -1487,11 +1569,8 @@ function sourceInputModeKind(mode: SourceInputMode): string {
   return "Native";
 }
 
-function articleDensityLabel(density: ArticleDensity): string {
-  if (density === "compact") {
-    return "Compact";
-  }
-  return "Comfortable";
+function entryLayoutLabel(layout: EntryLayout): string {
+  return layout === "card" ? "Card" : "List";
 }
 
 function readerTypographyLabel(mode: ReaderTypography): string {
@@ -1512,12 +1591,12 @@ function readInitialThemeMode(): ThemeMode {
   return "system";
 }
 
-function readInitialArticleDensity(): ArticleDensity {
-  const stored = localStorage.getItem(densityStorageKey);
-  if (stored === "compact" || stored === "comfortable") {
+function readInitialEntryLayout(): EntryLayout {
+  const stored = localStorage.getItem(entryLayoutStorageKey);
+  if (stored === "list" || stored === "card") {
     return stored;
   }
-  return "comfortable";
+  return "list";
 }
 
 function readInitialReaderTypography(): ReaderTypography {
