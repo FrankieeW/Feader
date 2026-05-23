@@ -386,7 +386,8 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             last_fetched_at TEXT,
-            last_error TEXT
+            last_error TEXT,
+            category TEXT
         );
 
         CREATE TABLE IF NOT EXISTS articles (
@@ -431,6 +432,12 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
         "last_error",
         "ALTER TABLE sources ADD COLUMN last_error TEXT",
     )?;
+    add_column_if_missing(
+        connection,
+        "sources",
+        "category",
+        "ALTER TABLE sources ADD COLUMN category TEXT",
+    )?;
     Ok(())
 }
 
@@ -468,7 +475,8 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 sources.last_fetched_at,
                 sources.last_error,
                 COUNT(articles.id) AS article_count,
-                SUM(CASE WHEN COALESCE(article_states.read, 0) = 0 AND articles.id IS NOT NULL THEN 1 ELSE 0 END) AS unread_count
+                SUM(CASE WHEN COALESCE(article_states.read, 0) = 0 AND articles.id IS NOT NULL THEN 1 ELSE 0 END) AS unread_count,
+                sources.category
             FROM sources
             LEFT JOIN articles ON articles.source_id = sources.id
             LEFT JOIN article_states ON article_states.article_id = articles.id
@@ -492,6 +500,7 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 last_error: row.get(8)?,
                 article_count: row.get(9)?,
                 unread_count: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
+                category: row.get(11)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -551,6 +560,15 @@ mod tests {
 
         assert_eq!(first.id, second.id);
         assert_eq!(database.list_sources().expect("sources list").len(), 1);
+    }
+
+    #[test]
+    fn new_source_has_no_category() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        assert_eq!(source.category, None);
     }
 
     #[test]

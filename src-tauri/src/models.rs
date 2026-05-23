@@ -10,6 +10,7 @@ pub struct Source {
     pub kind: String,
     pub title: String,
     pub url: String,
+    pub category: Option<String>,
     pub config_json: Option<String>,
     pub enabled: bool,
     pub created_at: String,
