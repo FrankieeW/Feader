@@ -43,8 +43,8 @@
 
 ## Visual language
 - Color: neutral editorial surfaces with graphite structure and restrained copper/green accents; light/dark/system themes share semantic tokens and should avoid one-note blue/purple SaaS styling.
-- Typography: system UI sans for compact app chrome; strong but restrained headings; later consider a separate reader typography mode rather than styling all chrome like article content.
-- Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and room for future resizable splitters.
+- Typography: system UI sans for compact app chrome; strong but restrained headings; reader body uses a dedicated typography mode (system/serif/large) kept separate from app chrome.
+- Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and resizable sidebar/timeline splitters with persisted widths.
 - Shape/radius/elevation: low-radius panels, subtle borders, no nested decorative cards.
 - Motion: minimal; hover/focus state only unless future settings allow reduced motion handling.
 - Imagery/iconography: no stock imagery; use text labels until an icon system is intentionally adopted.
@@ -90,4 +90,4 @@
 
 ## Open questions
 - [ ] Whether Feader should later adopt an icon library such as Lucide for denser command buttons / owner: product / impact: medium.
-- [ ] Whether reader typography should offer serif article mode / owner: product / impact: low.
+- [x] Reader typography offers system/serif/large article modes (shipped) / owner: product / impact: low.

@@ -705,6 +705,12 @@ function App() {
       onKeyDown={handleAppKeyDown}
       style={shellStyle}
     >
+      <IconRail
+        activeView={activeView}
+        onSelectView={setActiveView}
+        themeMode={themeMode}
+        onCycleTheme={() => setThemeMode((mode) => nextThemeMode(mode))}
+      />
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="brand">
@@ -731,19 +737,6 @@ function App() {
             <span>Alerts</span>
           </div>
         </div>
-
-        <nav className="workspace-nav" aria-label="Workspace views">
-          {(["reader", "sources", "settings"] as const).map((view) => (
-            <button
-              className={activeView === view ? "active" : ""}
-              key={view}
-              onClick={() => setActiveView(view)}
-              type="button"
-            >
-              {viewLabel(view)}
-            </button>
-          ))}
-        </nav>
 
         {activeView === "reader" ? (
           <>
@@ -1229,6 +1222,78 @@ function App() {
       ) : null}
     </main>
   );
+}
+
+function IconRail({
+  activeView,
+  onSelectView,
+  themeMode,
+  onCycleTheme,
+}: {
+  activeView: ViewMode;
+  onSelectView: (view: ViewMode) => void;
+  themeMode: ThemeMode;
+  onCycleTheme: () => void;
+}) {
+  return (
+    <nav className="icon-rail" aria-label="Primary">
+      <span className="rail-mark" aria-hidden="true">F</span>
+      {(["reader", "sources"] as const).map((view) => (
+        <button
+          aria-current={activeView === view ? "page" : undefined}
+          aria-label={viewLabel(view)}
+          className={`rail-button ${activeView === view ? "active" : ""}`}
+          key={view}
+          onClick={() => onSelectView(view)}
+          type="button"
+        >
+          {railIcon(view)}
+        </button>
+      ))}
+      <span className="rail-spacer" />
+      <button
+        aria-label={`Theme: ${themeLabel(themeMode)}`}
+        className="rail-button"
+        onClick={onCycleTheme}
+        type="button"
+      >
+        {railIcon("theme")}
+      </button>
+      <button
+        aria-current={activeView === "settings" ? "page" : undefined}
+        aria-label="Settings"
+        className={`rail-button ${activeView === "settings" ? "active" : ""}`}
+        onClick={() => onSelectView("settings")}
+        type="button"
+      >
+        {railIcon("settings")}
+      </button>
+    </nav>
+  );
+}
+
+function railIcon(name: ViewMode | "theme") {
+  const paths: Record<string, string> = {
+    reader: "M4 6h16M4 12h16M4 18h11",
+    sources: "M4 4h16v16H4zM4 9.5h16",
+    theme: "M12 7a5 5 0 100 10 5 5 0 000-10zM12 2v2M12 20v2M2 12h2M20 12h2",
+    settings: "M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M2 12h3M19 12h3",
+  };
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+      <path d={paths[name]} />
+    </svg>
+  );
+}
+
+function nextThemeMode(mode: ThemeMode): ThemeMode {
+  if (mode === "light") {
+    return "dark";
+  }
+  if (mode === "dark") {
+    return "system";
+  }
+  return "light";
 }
 
 function ThemeControl({
