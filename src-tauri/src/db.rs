@@ -78,6 +78,33 @@ impl AppDatabase {
         get_source_with_connection(&connection, source_id)
     }
 
+    /// Rename a source.
+    pub fn update_source_title(&self, source_id: i64, title: &str) -> Result<Source, String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Source title is required".to_string());
+        }
+
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE sources SET title = ?1, updated_at = ?2 WHERE id = ?3",
+                params![title, now, source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        get_source_with_connection(&connection, source_id)
+    }
+
+    /// Delete a source and its articles.
+    pub fn delete_source(&self, source_id: i64) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute("DELETE FROM sources WHERE id = ?1", [source_id])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     /// Merge parsed articles for a source and update fetch metadata.
     pub fn upsert_articles(
         &self,
@@ -106,6 +133,13 @@ impl AppDatabase {
                 )
                 .map_err(|error| error.to_string())?;
         }
+
+        transaction
+            .execute(
+                "UPDATE sources SET last_error = NULL, enabled = 1 WHERE id = ?1",
+                [source_id],
+            )
+            .map_err(|error| error.to_string())?;
 
         for article in articles {
             transaction
@@ -222,6 +256,61 @@ impl AppDatabase {
         self.update_article_state(article_id, None, Some(saved))
     }
 
+    /// Mark all matching articles as read.
+    pub fn mark_articles_read(&self, source_id: Option<i64>, read: bool) -> Result<usize, String> {
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let article_ids = if let Some(source_id) = source_id {
+            let mut statement = connection
+                .prepare("SELECT id FROM articles WHERE source_id = ?1")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([source_id], |row| row.get::<_, i64>(0))
+                .map_err(|error| error.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+        } else {
+            let mut statement = connection
+                .prepare("SELECT id FROM articles")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(|error| error.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+        };
+
+        for article_id in &article_ids {
+            connection
+                .execute(
+                    "
+                    INSERT INTO article_states (article_id, read, saved, updated_at)
+                    VALUES (?1, ?2, 0, ?3)
+                    ON CONFLICT(article_id) DO UPDATE SET
+                        read = excluded.read,
+                        updated_at = excluded.updated_at
+                    ",
+                    params![article_id, read, now],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(article_ids.len())
+    }
+
+    /// Store the latest refresh error for a source without deleting old articles.
+    pub fn record_source_error(&self, source_id: i64, error: &str) -> Result<(), String> {
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE sources SET last_error = ?1, updated_at = ?2 WHERE id = ?3",
+                params![error, now, source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     fn update_article_state(
         &self,
         article_id: i64,
@@ -268,9 +357,11 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             title TEXT NOT NULL,
             url TEXT NOT NULL UNIQUE,
             config_json TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            last_fetched_at TEXT
+            last_fetched_at TEXT,
+            last_error TEXT
         );
 
         CREATE TABLE IF NOT EXISTS articles (
@@ -302,7 +393,39 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
         ",
-    )
+    )?;
+    add_column_if_missing(
+        connection,
+        "sources",
+        "enabled",
+        "ALTER TABLE sources ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+    )?;
+    add_column_if_missing(
+        connection,
+        "sources",
+        "last_error",
+        "ALTER TABLE sources ADD COLUMN last_error TEXT",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    statement: &str,
+) -> rusqlite::Result<()> {
+    let mut columns = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = columns
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .any(|name| name == column);
+
+    if !exists {
+        connection.execute(statement, [])?;
+    }
+    Ok(())
 }
 
 fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, String> {
@@ -315,8 +438,10 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 sources.title,
                 sources.url,
                 sources.config_json,
+                sources.enabled,
                 sources.created_at,
                 sources.last_fetched_at,
+                sources.last_error,
                 COUNT(articles.id) AS article_count,
                 SUM(CASE WHEN COALESCE(article_states.read, 0) = 0 AND articles.id IS NOT NULL THEN 1 ELSE 0 END) AS unread_count
             FROM sources
@@ -336,10 +461,12 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 title: row.get(2)?,
                 url: row.get(3)?,
                 config_json: row.get(4)?,
-                created_at: row.get(5)?,
-                last_fetched_at: row.get(6)?,
-                article_count: row.get(7)?,
-                unread_count: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                enabled: row.get(5)?,
+                created_at: row.get(6)?,
+                last_fetched_at: row.get(7)?,
+                last_error: row.get(8)?,
+                article_count: row.get(9)?,
+                unread_count: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
             })
         })
         .map_err(|error| error.to_string())?;
@@ -444,5 +571,125 @@ mod tests {
 
         assert!(updated.read);
         assert_eq!(updated.summary.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn deleting_source_cascades_articles() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let article = ParsedArticle {
+            external_id: None,
+            title: "First".to_string(),
+            url: "https://example.com/one".to_string(),
+            canonical_url: None,
+            summary: None,
+            content_html: None,
+            content_text: None,
+            author: None,
+            published_at: None,
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article])
+            .expect("article inserts");
+        database.delete_source(source.id).expect("source deletes");
+
+        assert!(database.list_sources().expect("sources list").is_empty());
+        assert!(database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list")
+            .is_empty());
+    }
+
+    #[test]
+    fn refresh_error_is_recorded_without_deleting_articles() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let article = ParsedArticle {
+            external_id: None,
+            title: "First".to_string(),
+            url: "https://example.com/one".to_string(),
+            canonical_url: None,
+            summary: None,
+            content_html: None,
+            content_text: None,
+            author: None,
+            published_at: None,
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article])
+            .expect("article inserts");
+        database
+            .record_source_error(source.id, "network failed")
+            .expect("error records");
+
+        let source = database.get_source(source.id).expect("source loads");
+        let articles = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list");
+        assert_eq!(source.last_error.as_deref(), Some("network failed"));
+        assert_eq!(articles.len(), 1);
+    }
+
+    #[test]
+    fn mark_articles_read_updates_all_matching_articles() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let articles = [
+            ParsedArticle {
+                external_id: None,
+                title: "First".to_string(),
+                url: "https://example.com/one".to_string(),
+                canonical_url: None,
+                summary: None,
+                content_html: None,
+                content_text: None,
+                author: None,
+                published_at: None,
+                image_url: None,
+                tags_json: None,
+            },
+            ParsedArticle {
+                external_id: None,
+                title: "Second".to_string(),
+                url: "https://example.com/two".to_string(),
+                canonical_url: None,
+                summary: None,
+                content_html: None,
+                content_text: None,
+                author: None,
+                published_at: None,
+                image_url: None,
+                tags_json: None,
+            },
+        ];
+
+        database
+            .upsert_articles(source.id, None, &articles)
+            .expect("articles insert");
+        let changed = database
+            .mark_articles_read(Some(source.id), true)
+            .expect("articles marked");
+        let unread = database
+            .list_articles(ArticleFilter {
+                source_id: Some(source.id),
+                unread_only: Some(true),
+                saved_only: None,
+            })
+            .expect("unread articles list");
+
+        assert_eq!(changed, 2);
+        assert!(unread.is_empty());
     }
 }

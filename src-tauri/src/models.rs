@@ -11,8 +11,10 @@ pub struct Source {
     pub title: String,
     pub url: String,
     pub config_json: Option<String>,
+    pub enabled: bool,
     pub created_at: String,
     pub last_fetched_at: Option<String>,
+    pub last_error: Option<String>,
     pub article_count: i64,
     pub unread_count: i64,
 }
@@ -47,6 +49,24 @@ pub struct Article {
 pub struct AddSourceRequest {
     pub url: String,
     pub title: Option<String>,
+}
+
+/// Request body for renaming a source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSourceTitleRequest {
+    pub source_id: i64,
+    pub title: String,
+}
+
+/// Result for one source refresh attempt.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRefreshResult {
+    pub source_id: i64,
+    pub ok: bool,
+    pub article_count: usize,
+    pub error: Option<String>,
 }
 
 /// Optional article list filters.
