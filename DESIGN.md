@@ -4,7 +4,14 @@
 - Status: Active
 - Last refreshed: 2026-05-23
 - Primary product surfaces: Tauri desktop reader, source management, RSS/XPath source creation, article reading panel.
-- Evidence reviewed: `README.md`, `docs/plugin-system.md`, `src/App.tsx`, `src/App.css`.
+- Evidence reviewed: `README.md`, `docs/plugin-system.md`, `src/App.tsx`, `src/App.css`, Folo GitHub source (`RSSNext/Folo`), MrRSS GitHub source (`WCY-dt/MrRSS`).
+
+## External references
+- Folo: desktop-grade reader architecture with a persistent subscription column, entry column, reader content area, command/search panels, AI chat surfaces, layout state persistence, and route-level separation between timeline, AI, discover/subview, and reader modes.
+- Folo visual pattern: high-density but spacious three-pane workspace, unread/source badges, context-aware toolbars, resizable columns, media-aware entry layouts, and AI affordances that sit beside the reading flow instead of replacing it.
+- MrRSS: self-hosted AI RSS reader frontend using Vue, Tailwind, CSS variables, dark-mode class support, Sidebar + ArticleList + ArticleDetail workspace, resizable article column, global modals, context menu, toast system, and a practical feature set around AI summary/translation, plugins, XPath/script/newsletter sources, and integrations.
+- MrRSS visual pattern: more utility-first than Folo; useful as a reference for layout modes such as normal/compact/card/image gallery and for keeping advanced source/plugin capability visible without making the base reader feel enterprise-heavy.
+- Feader adaptation rule: borrow information architecture and interaction ideas, not visual identity. Feader should feel like a local-first technical workstation for feeds, XPath adapters, AI extraction, and future Web3-friendly source verification.
 
 ## Brand
 - Personality: focused, technical, calm, high-signal.
@@ -22,28 +29,30 @@
 - Key contexts of use: desktop knowledge work, repeated scanning, low-light reading, mixed system theme preferences.
 
 ## Information architecture
-- Primary navigation: left source rail, center article queue, right reader/details panel.
-- Core routes/screens: single desktop workspace; modal-free source creation and reading.
-- Content hierarchy: source health and filters first, article title/source/date second, full reading body/details third.
+- Primary navigation: left source rail, center article queue, right reader/details panel; later add command palette/search and optional AI side panel.
+- Core routes/screens: single desktop workspace first; source creation, XPath preview, reader, source health, and future plugin/script panels should remain reachable without leaving the workspace.
+- Content hierarchy: source health and filters first, article title/source/date second, full reading body/details third, AI/source extraction state fourth.
 
 ## Design principles
 - Dense but breathable: prioritize scanning speed without cramped controls.
 - State must be visible: theme, source kind, unread state, errors, selected article, and refresh status should be legible.
 - Progressive power: RSS stays simple; XPath exposes advanced controls without hiding the basic flow.
+- AI beside the reader: summaries, XPath fill, extraction diagnostics, and chat should appear as contextual panels/actions, not as a generic chatbot-first product.
+- Advanced sources are first-class: RSS, XPath, script/plugin, newsletter, and future Web3-friendly sources should share a common health/status language.
 - Tradeoffs: prefer durable controls over decorative imagery; richer theme polish should not reduce information density.
 
 ## Visual language
-- Color: neutral editorial surfaces with green/graphite structure and copper actions; light/dark/system themes share semantic tokens.
-- Typography: system UI sans for compact app chrome; strong but restrained headings.
-- Spacing/layout rhythm: 8px radius, 8/12/16/24px spacing steps, stable three-column desktop grid.
+- Color: neutral editorial surfaces with graphite structure and restrained copper/green accents; light/dark/system themes share semantic tokens and should avoid one-note blue/purple SaaS styling.
+- Typography: system UI sans for compact app chrome; strong but restrained headings; later consider a separate reader typography mode rather than styling all chrome like article content.
+- Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and room for future resizable splitters.
 - Shape/radius/elevation: low-radius panels, subtle borders, no nested decorative cards.
 - Motion: minimal; hover/focus state only unless future settings allow reduced motion handling.
 - Imagery/iconography: no stock imagery; use text labels until an icon system is intentionally adopted.
 
 ## Components
-- Existing components to reuse: source rail, source mode selector, article card, filter tabs, reader panel, source panel.
-- New/changed components: theme segmented control with Light/Dark/System choices.
-- Variants and states: selected, read, disabled, danger, error, active tab, dark/light/system theme.
+- Existing components to reuse: source rail, source mode selector, article card, filter tabs, reader panel, source panel, theme segmented control.
+- New/changed components: command toolbar, source health row, compact article queue item, AI/action strip, XPath/plugin configuration panel, empty/error/loading states with consistent icon treatment.
+- Variants and states: selected, read, unread, saved, disabled, danger, error, warning, syncing, active tab, dark/light/system theme, source kind badge.
 - Token/component ownership: `src/App.css` owns CSS custom properties; `src/App.tsx` owns theme preference state.
 
 ## Accessibility
@@ -74,6 +83,7 @@
 ## Implementation constraints
 - Framework/styling system: React + TypeScript + plain CSS modules via `src/App.css`.
 - Design-token constraints: use CSS custom properties, not a new design dependency.
+- Reference constraints: Folo uses a much larger modular route/layout system and MrRSS uses Vue/Tailwind; Feader should adapt only the design patterns that fit the current Tauri + React + plain CSS stack.
 - Performance constraints: preserve lightweight app shell; no animation or image dependency.
 - Compatibility constraints: theme preference stored in `localStorage`, system mode driven by `prefers-color-scheme`.
 - Test/screenshot expectations: run build checks; use browser verification when the in-app browser is available.
