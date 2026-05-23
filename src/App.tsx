@@ -53,6 +53,7 @@ type SourceRefreshResult = {
 type FilterMode = "all" | "unread" | "saved";
 type SourceInputMode = "rss" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
+type ViewMode = "reader" | "sources" | "settings";
 
 type XPathSelectors = {
   items: string;
@@ -94,6 +95,8 @@ function App() {
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
+  const [activeView, setActiveView] = useState<ViewMode>("reader");
+  const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
   const [feedUrl, setFeedUrl] = useState("");
   const [xpathTitle, setXPathTitle] = useState("");
@@ -171,6 +174,7 @@ function App() {
       setFeedUrl("");
       setXPathTitle("");
       setXPathPreview([]);
+      setShowSourceComposer(false);
       setSelectedSourceId(source.id);
       setFilterMode("all");
       await loadData(source.id, "all", undefined);
@@ -319,8 +323,6 @@ function App() {
           <span className="sync-pill">{isBusy ? "Syncing" : "Ready"}</span>
         </div>
 
-        <ThemeControl mode={themeMode} onChange={setThemeMode} />
-
         <div className="source-stats" aria-label="Library summary">
           <div>
             <strong>{sources.length}</strong>
@@ -336,52 +338,18 @@ function App() {
           </div>
         </div>
 
-        <section className="source-composer" aria-label="Add source">
-          <div className="panel-heading">
-            <span>New source</span>
-            <span>{sourceInputMode === "rss" ? "RSS/Atom" : "XPath"}</span>
-          </div>
-          <form className="feed-form" onSubmit={handleAddFeed}>
-            <div className="source-mode" role="tablist" aria-label="Source type">
-              {(["rss", "xpath"] as const).map((mode) => (
-                <button
-                  className={sourceInputMode === mode ? "active" : ""}
-                  key={mode}
-                  onClick={() => setSourceInputMode(mode)}
-                  role="tab"
-                  type="button"
-                >
-                  {mode === "rss" ? "RSS/Atom" : "XPath"}
-                </button>
-              ))}
-            </div>
-            <input
-              aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
-              disabled={isBusy}
-              onChange={(event) => setFeedUrl(event.currentTarget.value)}
-              placeholder={
-                sourceInputMode === "rss"
-                  ? "https://example.com/feed.xml"
-                  : "https://example.com/articles"
-              }
-              value={feedUrl}
-            />
-            {sourceInputMode === "xpath" ? (
-              <XPathSourceForm
-                isBusy={isBusy}
-                onPreview={() => void handlePreviewXPath()}
-                onSelectorsChange={setXPathSelectors}
-                onTitleChange={setXPathTitle}
-                preview={xpathPreview}
-                selectors={xpathSelectors}
-                title={xpathTitle}
-              />
-            ) : null}
-            <button className="primary-action" disabled={isBusy} type="submit">
-              {sourceInputMode === "rss" ? "Add source" : "Confirm source"}
+        <nav className="workspace-nav" aria-label="Workspace views">
+          {(["reader", "sources", "settings"] as const).map((view) => (
+            <button
+              className={activeView === view ? "active" : ""}
+              key={view}
+              onClick={() => setActiveView(view)}
+              type="button"
+            >
+              {viewLabel(view)}
             </button>
-          </form>
-        </section>
+          ))}
+        </nav>
 
         <button className="secondary-action full-width" disabled={isBusy} onClick={handleRefreshAll} type="button">
           Refresh all sources
@@ -422,6 +390,8 @@ function App() {
         </nav>
       </aside>
 
+      {activeView === "reader" ? (
+        <>
       <section className="timeline" aria-label="Reading queue">
         <header className="topbar">
           <div>
@@ -604,6 +574,159 @@ function App() {
           )}
         </section>
       </aside>
+        </>
+      ) : null}
+
+      {activeView === "sources" ? (
+        <section className="page-view" aria-label="Sources">
+          <header className="page-header">
+            <div>
+              <p className="eyebrow">Sources</p>
+              <h1>Source manager</h1>
+            </div>
+            <button
+              className="primary-action icon-action"
+              onClick={() => setShowSourceComposer((value) => !value)}
+              type="button"
+            >
+              {showSourceComposer ? "Close" : "+"}
+            </button>
+          </header>
+
+          {showSourceComposer ? (
+            <section className="source-composer page-panel" aria-label="Add source">
+              <div className="panel-heading">
+                <span>New source</span>
+                <span>{sourceInputMode === "rss" ? "RSS/Atom" : "XPath"}</span>
+              </div>
+              <form className="feed-form" onSubmit={handleAddFeed}>
+                <div className="source-mode" role="tablist" aria-label="Source type">
+                  {(["rss", "xpath"] as const).map((mode) => (
+                    <button
+                      className={sourceInputMode === mode ? "active" : ""}
+                      key={mode}
+                      onClick={() => setSourceInputMode(mode)}
+                      role="tab"
+                      type="button"
+                    >
+                      {mode === "rss" ? "RSS/Atom" : "XPath"}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
+                  disabled={isBusy}
+                  onChange={(event) => setFeedUrl(event.currentTarget.value)}
+                  placeholder={
+                    sourceInputMode === "rss"
+                      ? "https://example.com/feed.xml"
+                      : "https://example.com/articles"
+                  }
+                  value={feedUrl}
+                />
+                {sourceInputMode === "xpath" ? (
+                  <XPathSourceForm
+                    isBusy={isBusy}
+                    onPreview={() => void handlePreviewXPath()}
+                    onSelectorsChange={setXPathSelectors}
+                    onTitleChange={setXPathTitle}
+                    preview={xpathPreview}
+                    selectors={xpathSelectors}
+                    title={xpathTitle}
+                  />
+                ) : null}
+                <button className="primary-action" disabled={isBusy} type="submit">
+                  {sourceInputMode === "rss" ? "Add source" : "Confirm source"}
+                </button>
+              </form>
+            </section>
+          ) : null}
+
+          <div className="source-grid">
+            {sources.length === 0 ? (
+              <section className="empty-state">
+                <h2>No sources</h2>
+                <p>Add a source to start building the local reader.</p>
+              </section>
+            ) : (
+              sources.map((source) => (
+                <article className="source-card" key={source.id}>
+                  <div className="panel-heading">
+                    <span>{source.title}</span>
+                    <span>{sourceHealth(source)}</span>
+                  </div>
+                  <dl>
+                    <dt>Kind</dt>
+                    <dd>{source.kind}</dd>
+                    <dt>Unread</dt>
+                    <dd>{source.unreadCount}</dd>
+                    <dt>Articles</dt>
+                    <dd>{source.articleCount}</dd>
+                    <dt>Last refresh</dt>
+                    <dd>{formatDate(source.lastFetchedAt)}</dd>
+                  </dl>
+                  {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
+                  <div className="story-actions">
+                    <button
+                      disabled={isBusy}
+                      onClick={() => {
+                        setActiveView("reader");
+                        void handleSelectSource(source.id);
+                      }}
+                      type="button"
+                    >
+                      Select
+                    </button>
+                    <button
+                      disabled={isBusy}
+                      onClick={() => void handleRefreshSource(source.id)}
+                      type="button"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      {activeView === "settings" ? (
+        <section className="page-view" aria-label="Settings">
+          <header className="page-header">
+            <div>
+              <p className="eyebrow">Settings</p>
+              <h1>Preferences</h1>
+            </div>
+          </header>
+
+          <section className="settings-grid">
+            <article className="settings-card">
+              <div className="panel-heading">
+                <span>Appearance</span>
+                <span>{themeLabel(themeMode)}</span>
+              </div>
+              <ThemeControl mode={themeMode} onChange={setThemeMode} />
+            </article>
+
+            <article className="settings-card">
+              <div className="panel-heading">
+                <span>Workspace</span>
+                <span>{viewLabel(activeView)}</span>
+              </div>
+              <dl>
+                <dt>Sources</dt>
+                <dd>{sources.length}</dd>
+                <dt>Unread</dt>
+                <dd>{unreadCount}</dd>
+                <dt>Alerts</dt>
+                <dd>{failedSourceCount}</dd>
+              </dl>
+            </article>
+          </section>
+        </section>
+      ) : null}
     </main>
   );
 }
@@ -639,6 +762,16 @@ function themeLabel(mode: ThemeMode): string {
     return "Dark";
   }
   return "System";
+}
+
+function viewLabel(mode: ViewMode): string {
+  if (mode === "reader") {
+    return "Reader";
+  }
+  if (mode === "sources") {
+    return "Sources";
+  }
+  return "Settings";
 }
 
 function readInitialThemeMode(): ThemeMode {
