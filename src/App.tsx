@@ -1545,7 +1545,7 @@ function ReaderArticle({
           {article.saved ? "Unsave" : "Save"}
         </button>
         <a href={article.url} rel="noreferrer" target="_blank">
-          Original
+          Open full page
         </a>
       </div>
       <dl className="reader-meta">
