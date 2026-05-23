@@ -8,6 +8,7 @@ type Source = {
   kind: string;
   title: string;
   url: string;
+  category?: string | null;
   configJson?: string | null;
   enabled: boolean;
   createdAt: string;
@@ -115,6 +116,7 @@ const testModeSources: Source[] = [
     kind: "rss",
     title: "小众软件",
     url: builtInTestFeedUrl,
+    category: "News",
     enabled: true,
     createdAt: "2026-05-23T08:00:00.000Z",
     lastFetchedAt: "2026-05-23T08:00:00.000Z",
@@ -303,6 +305,15 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       })) as T;
     case "add_xpath_source":
       throw new Error("XPath test mode is read-only. Use the Tauri app to validate XPath sources.");
+    case "set_source_category": {
+      const sourceId = Number(args?.sourceId);
+      const rawCategory = typeof args?.category === "string" ? args.category.trim() : "";
+      const category = rawCategory.length > 0 ? rawCategory : null;
+      testModeSourceState = testModeSourceState.map((source) =>
+        source.id === sourceId ? { ...source, category } : source,
+      );
+      return testModeSourceState.find((source) => source.id === sourceId) as T;
+    }
     default:
       throw new Error(`Test mode command '${command}' is not implemented.`);
   }
@@ -353,6 +364,7 @@ function upsertTestModeSource(url = builtInTestFeedUrl, title = "小众软件"):
     kind: "rss",
     title: title.trim() || trimmedUrl,
     url: trimmedUrl,
+    category: null,
     enabled: true,
     createdAt: new Date().toISOString(),
     lastFetchedAt: new Date().toISOString(),
@@ -821,6 +833,7 @@ function App() {
           <div className="filter-tabs" role="tablist" aria-label="Article filters">
             {(["all", "unread", "saved"] as const).map((mode) => (
               <button
+                aria-selected={filterMode === mode}
                 className={filterMode === mode ? "active" : ""}
                 key={mode}
                 onClick={() => void handleSetFilter(mode)}
@@ -1027,6 +1040,7 @@ function App() {
                   <div className="adapter-rail" role="tablist" aria-label="Source type">
                     {(["rss", "xpath"] as const).map((mode) => (
                       <button
+                        aria-selected={sourceInputMode === mode}
                         className={sourceInputMode === mode ? "active" : ""}
                         key={mode}
                         onClick={() => setSourceInputMode(mode)}
