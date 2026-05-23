@@ -113,6 +113,8 @@ function App() {
   );
   const unreadCount = sources.reduce((total, source) => total + source.unreadCount, 0);
   const articleCount = sources.reduce((total, source) => total + source.articleCount, 0);
+  const failedSourceCount = sources.filter((source) => source.lastError).length;
+  const selectedSourceHealth = selectedSource ? sourceHealth(selectedSource) : "Mixed";
 
   useEffect(() => {
     void loadData();
@@ -306,59 +308,83 @@ function App() {
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">F</span>
-          <div>
-            <strong>Feader</strong>
-            <span>{unreadCount} unread</span>
+        <div className="sidebar-header">
+          <div className="brand">
+            <span className="brand-mark">F</span>
+            <div>
+              <strong>Feader</strong>
+              <span>Local source desk</span>
+            </div>
           </div>
+          <span className="sync-pill">{isBusy ? "Syncing" : "Ready"}</span>
         </div>
 
         <ThemeControl mode={themeMode} onChange={setThemeMode} />
 
-        <form className="feed-form" onSubmit={handleAddFeed}>
-          <div className="source-mode" role="tablist" aria-label="Source type">
-            {(["rss", "xpath"] as const).map((mode) => (
-              <button
-                className={sourceInputMode === mode ? "active" : ""}
-                key={mode}
-                onClick={() => setSourceInputMode(mode)}
-                role="tab"
-                type="button"
-              >
-                {mode === "rss" ? "RSS/Atom" : "XPath"}
-              </button>
-            ))}
+        <div className="source-stats" aria-label="Library summary">
+          <div>
+            <strong>{sources.length}</strong>
+            <span>Sources</span>
           </div>
-          <input
-            aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
-            disabled={isBusy}
-            onChange={(event) => setFeedUrl(event.currentTarget.value)}
-            placeholder={
-              sourceInputMode === "rss"
-                ? "https://example.com/feed.xml"
-                : "https://example.com/articles"
-            }
-            value={feedUrl}
-          />
-          {sourceInputMode === "xpath" ? (
-            <XPathSourceForm
-              isBusy={isBusy}
-              onPreview={() => void handlePreviewXPath()}
-              onSelectorsChange={setXPathSelectors}
-              onTitleChange={setXPathTitle}
-              preview={xpathPreview}
-              selectors={xpathSelectors}
-              title={xpathTitle}
-            />
-          ) : null}
-          <button disabled={isBusy} type="submit">
-            {sourceInputMode === "rss" ? "Add" : "Confirm"}
-          </button>
-        </form>
+          <div>
+            <strong>{unreadCount}</strong>
+            <span>Unread</span>
+          </div>
+          <div>
+            <strong>{failedSourceCount}</strong>
+            <span>Alerts</span>
+          </div>
+        </div>
 
-        <button className="secondary-action" disabled={isBusy} onClick={handleRefreshAll} type="button">
-          Refresh all
+        <section className="source-composer" aria-label="Add source">
+          <div className="panel-heading">
+            <span>New source</span>
+            <span>{sourceInputMode === "rss" ? "RSS/Atom" : "XPath"}</span>
+          </div>
+          <form className="feed-form" onSubmit={handleAddFeed}>
+            <div className="source-mode" role="tablist" aria-label="Source type">
+              {(["rss", "xpath"] as const).map((mode) => (
+                <button
+                  className={sourceInputMode === mode ? "active" : ""}
+                  key={mode}
+                  onClick={() => setSourceInputMode(mode)}
+                  role="tab"
+                  type="button"
+                >
+                  {mode === "rss" ? "RSS/Atom" : "XPath"}
+                </button>
+              ))}
+            </div>
+            <input
+              aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
+              disabled={isBusy}
+              onChange={(event) => setFeedUrl(event.currentTarget.value)}
+              placeholder={
+                sourceInputMode === "rss"
+                  ? "https://example.com/feed.xml"
+                  : "https://example.com/articles"
+              }
+              value={feedUrl}
+            />
+            {sourceInputMode === "xpath" ? (
+              <XPathSourceForm
+                isBusy={isBusy}
+                onPreview={() => void handlePreviewXPath()}
+                onSelectorsChange={setXPathSelectors}
+                onTitleChange={setXPathTitle}
+                preview={xpathPreview}
+                selectors={xpathSelectors}
+                title={xpathTitle}
+              />
+            ) : null}
+            <button className="primary-action" disabled={isBusy} type="submit">
+              {sourceInputMode === "rss" ? "Add source" : "Confirm source"}
+            </button>
+          </form>
+        </section>
+
+        <button className="secondary-action full-width" disabled={isBusy} onClick={handleRefreshAll} type="button">
+          Refresh all sources
         </button>
 
         <nav className="feed-list" aria-label="Feeds">
@@ -367,8 +393,14 @@ function App() {
             onClick={() => void handleSelectSource(undefined)}
             type="button"
           >
-            <span>All feeds</span>
-            <small>{articleCount}</small>
+            <span className="feed-main">
+              <span className="status-dot mixed" />
+              <span>
+                All feeds
+                <em>{articleCount} articles</em>
+              </span>
+            </span>
+            <small>{unreadCount}</small>
           </button>
           {sources.map((source) => (
             <button
@@ -377,9 +409,12 @@ function App() {
               onClick={() => void handleSelectSource(source.id)}
               type="button"
             >
-              <span>
-                {source.title}
-                <em>{source.kind}</em>
+              <span className="feed-main">
+                <span className={`status-dot ${source.lastError ? "error" : "healthy"}`} />
+                <span>
+                  {source.title}
+                  <em>{source.kind} · {source.articleCount} articles</em>
+                </span>
               </span>
               <small>{source.unreadCount}</small>
             </button>
@@ -390,12 +425,16 @@ function App() {
       <section className="timeline" aria-label="Reading queue">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{selectedSource?.kind ?? "RSS"}</p>
+            <p className="eyebrow">{selectedSource?.kind ?? "Library"} · {selectedSourceHealth}</p>
             <h1>{selectedSource?.title ?? "Reading queue"}</h1>
+          </div>
+          <div className="queue-metrics" aria-label="Queue summary">
+            <span>{articles.length} shown</span>
+            <span>{unreadCount} unread</span>
           </div>
           <div className="topbar-actions">
             <button
-              className="secondary-action"
+              className="secondary-action compact-action"
               disabled={isBusy || articles.length === 0}
               onClick={handleMarkAllRead}
               type="button"
@@ -413,21 +452,22 @@ function App() {
           </div>
         </header>
 
-        <div className="filter-tabs" role="tablist" aria-label="Article filters">
-          {(["all", "unread", "saved"] as const).map((mode) => (
-            <button
-              className={filterMode === mode ? "active" : ""}
-              key={mode}
-              onClick={() => void handleSetFilter(mode)}
-              role="tab"
-              type="button"
-            >
-              {filterLabel(mode)}
-            </button>
-          ))}
+        <div className="timeline-toolbar">
+          <div className="filter-tabs" role="tablist" aria-label="Article filters">
+            {(["all", "unread", "saved"] as const).map((mode) => (
+              <button
+                className={filterMode === mode ? "active" : ""}
+                key={mode}
+                onClick={() => void handleSetFilter(mode)}
+                role="tab"
+                type="button"
+              >
+                {filterLabel(mode)}
+              </button>
+            ))}
+          </div>
+          <div className="status-line">{status}</div>
         </div>
-
-        <div className="status-line">{status}</div>
 
         <div className="story-list">
           {articles.length === 0 ? (
@@ -444,6 +484,10 @@ function App() {
                 key={article.id}
                 onClick={() => setSelectedArticleId(article.id)}
               >
+                <div className="story-state">
+                  <span className={article.read ? "read-dot" : "unread-dot"} />
+                  {article.saved ? <span className="saved-chip">Saved</span> : null}
+                </div>
                 <div className="story-meta">
                   <span>{article.sourceTitle}</span>
                   <span>{formatDate(article.publishedAt ?? article.createdAt)}</span>
@@ -451,10 +495,16 @@ function App() {
                 <h2>{article.title}</h2>
                 {article.summary ? <p>{stripHtml(article.summary)}</p> : null}
                 <div className="story-actions">
-                  <button onClick={() => void handleToggleRead(article)} type="button">
+                  <button onClick={(event) => {
+                    event.stopPropagation();
+                    void handleToggleRead(article);
+                  }} type="button">
                     {article.read ? "Unread" : "Read"}
                   </button>
-                  <button onClick={() => void handleToggleSaved(article)} type="button">
+                  <button onClick={(event) => {
+                    event.stopPropagation();
+                    void handleToggleSaved(article);
+                  }} type="button">
                     {article.saved ? "Unsave" : "Save"}
                   </button>
                   <a href={article.url} onClick={(event) => event.stopPropagation()} rel="noreferrer" target="_blank">
@@ -470,7 +520,7 @@ function App() {
       <aside className="reader-panel" aria-label="Reader panel">
         {selectedArticle ? (
           <article className="reader-article">
-            <div className="story-meta">
+            <div className="reader-kicker">
               <span>{selectedArticle.sourceTitle}</span>
               <span>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</span>
             </div>
@@ -507,7 +557,10 @@ function App() {
         )}
 
         <section className="source-panel">
-          <p className="eyebrow">Source</p>
+          <div className="panel-heading">
+            <span>Source</span>
+            <span>{selectedSource ? sourceHealth(selectedSource) : "All feeds"}</span>
+          </div>
           {selectedSource ? (
             <>
               <form className="rename-form" onSubmit={handleRenameSource}>
@@ -525,6 +578,8 @@ function App() {
               <dl>
                 <dt>URL</dt>
                 <dd>{selectedSource.url}</dd>
+                <dt>Kind</dt>
+                <dd>{selectedSource.kind}</dd>
                 <dt>Articles</dt>
                 <dd>{selectedSource.articleCount}</dd>
                 <dt>Unread</dt>
@@ -774,6 +829,16 @@ function emptyStateCopy(mode: FilterMode): string {
     return "No saved articles match this view.";
   }
   return "Add or refresh a feed to populate the local reader.";
+}
+
+function sourceHealth(source: Source): string {
+  if (source.lastError) {
+    return "Attention";
+  }
+  if (source.lastFetchedAt) {
+    return "Healthy";
+  }
+  return "New";
 }
 
 function formatDate(value?: string | null): string {
