@@ -56,6 +56,7 @@ type SourceInputMode = "rss" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
 type ViewMode = "reader" | "sources" | "settings";
 type ArticleDensity = "comfortable" | "compact";
+type ReaderTypography = "system" | "serif" | "large";
 type PaneKey = "sidebar" | "timeline";
 
 type PaneWidths = {
@@ -97,6 +98,7 @@ const defaultXPathSelectors: XPathSelectors = {
 const themeStorageKey = "feader.theme";
 const densityStorageKey = "feader.articleDensity";
 const paneStorageKey = "feader.paneWidths";
+const readerTypographyStorageKey = "feader.readerTypography";
 const builtInTestFeedUrl = "https://www.appinn.com/feed/";
 const defaultPaneWidths: PaneWidths = {
   sidebar: 240,
@@ -375,6 +377,9 @@ function App() {
   const [articleDensity, setArticleDensity] = useState<ArticleDensity>(() =>
     readInitialArticleDensity(),
   );
+  const [readerTypography, setReaderTypography] = useState<ReaderTypography>(() =>
+    readInitialReaderTypography(),
+  );
   const [paneWidths, setPaneWidths] = useState<PaneWidths>(() => readInitialPaneWidths());
   const [feedUrl, setFeedUrl] = useState("");
   const [xpathTitle, setXPathTitle] = useState("");
@@ -418,6 +423,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(densityStorageKey, articleDensity);
   }, [articleDensity]);
+
+  useEffect(() => {
+    localStorage.setItem(readerTypographyStorageKey, readerTypography);
+  }, [readerTypography]);
 
   useEffect(() => {
     localStorage.setItem(paneStorageKey, JSON.stringify(paneWidths));
@@ -839,7 +848,7 @@ function App() {
       />
       <aside className="reader-panel" aria-label="Reader panel">
         {selectedArticle ? (
-          <article className="reader-article">
+          <article className="reader-article" data-typography={readerTypography}>
             <div className="reader-kicker">
               <span>{selectedArticle.sourceTitle}</span>
               <span>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</span>
@@ -857,6 +866,21 @@ function App() {
                 Original
               </a>
             </div>
+            <dl className="reader-meta">
+              <dt>Source</dt>
+              <dd>{selectedArticle.sourceTitle}</dd>
+              <dt>Published</dt>
+              <dd>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</dd>
+              {selectedArticle.canonicalUrl ? (
+                <>
+                  <dt>Canonical</dt>
+                  <dd>{selectedArticle.canonicalUrl}</dd>
+                </>
+              ) : null}
+            </dl>
+            {selectedArticle.imageUrl ? (
+              <img alt="" className="reader-image" src={selectedArticle.imageUrl} />
+            ) : null}
             <div className="reader-body">
               {selectedArticle.contentText ? (
                 <p>{selectedArticle.contentText}</p>
@@ -1082,6 +1106,23 @@ function App() {
                 Reset workspace layout
               </button>
             </article>
+
+            <article className="settings-card">
+              <div className="panel-heading">
+                <span>Reader</span>
+                <span>{readerTypographyLabel(readerTypography)}</span>
+              </div>
+              <ReaderTypographyControl
+                mode={readerTypography}
+                onChange={setReaderTypography}
+              />
+              <dl>
+                <dt>Body</dt>
+                <dd>{readerTypographyLabel(readerTypography)}</dd>
+                <dt>Actions</dt>
+                <dd>Sticky</dd>
+              </dl>
+            </article>
           </section>
         </section>
       ) : null}
@@ -1135,6 +1176,29 @@ function DensityControl({
   );
 }
 
+function ReaderTypographyControl({
+  mode,
+  onChange,
+}: {
+  mode: ReaderTypography;
+  onChange: (mode: ReaderTypography) => void;
+}) {
+  return (
+    <div className="reader-type-control" role="group" aria-label="Reader typography">
+      {(["system", "serif", "large"] as const).map((nextMode) => (
+        <button
+          className={mode === nextMode ? "active" : ""}
+          key={nextMode}
+          onClick={() => onChange(nextMode)}
+          type="button"
+        >
+          {readerTypographyLabel(nextMode)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function PaneResizer({
   label,
   onPointerDown,
@@ -1180,6 +1244,16 @@ function articleDensityLabel(density: ArticleDensity): string {
   return "Comfortable";
 }
 
+function readerTypographyLabel(mode: ReaderTypography): string {
+  if (mode === "serif") {
+    return "Serif";
+  }
+  if (mode === "large") {
+    return "Large";
+  }
+  return "System";
+}
+
 function readInitialThemeMode(): ThemeMode {
   const stored = localStorage.getItem(themeStorageKey);
   if (stored === "light" || stored === "dark" || stored === "system") {
@@ -1194,6 +1268,14 @@ function readInitialArticleDensity(): ArticleDensity {
     return stored;
   }
   return "comfortable";
+}
+
+function readInitialReaderTypography(): ReaderTypography {
+  const stored = localStorage.getItem(readerTypographyStorageKey);
+  if (stored === "system" || stored === "serif" || stored === "large") {
+    return stored;
+  }
+  return "system";
 }
 
 function readInitialPaneWidths(): PaneWidths {

@@ -205,6 +205,7 @@ input:disabled {
 
 .theme-control,
 .density-control,
+.reader-type-control,
 .source-mode,
 .filter-tabs,
 .workspace-nav {
@@ -223,6 +224,10 @@ input:disabled {
 .density-control {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   width: fit-content;
+}
+
+.reader-type-control {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .workspace-nav {
@@ -287,6 +292,7 @@ input:disabled {
 
 .theme-control button,
 .density-control button,
+.reader-type-control button,
 .source-mode button,
 .filter-tabs button,
 .workspace-nav button {
@@ -297,6 +303,7 @@ input:disabled {
 
 .theme-control button.active,
 .density-control button.active,
+.reader-type-control button.active,
 .source-mode button.active,
 .filter-tabs button.active,
 .workspace-nav button.active {
@@ -878,11 +885,48 @@ input:focus-visible,
 }
 
 .reader-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   width: fit-content;
   max-width: 100%;
   padding: 6px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
+  background: color-mix(in srgb, var(--color-panel-strong) 88%, var(--color-panel-soft));
+  box-shadow: var(--shadow-soft);
+}
+
+.reader-meta {
+  display: grid;
+  width: min(100%, 68ch);
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.reader-meta dt {
+  color: var(--color-heading);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.reader-meta dd {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.reader-image {
+  width: min(100%, 68ch);
+  max-height: 360px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  object-fit: cover;
   background: var(--color-panel-soft);
 }
 
@@ -906,6 +950,23 @@ input:focus-visible,
   line-height: 1.92;
   overflow-wrap: anywhere;
   text-wrap: pretty;
+}
+
+.reader-article[data-typography="serif"] .reader-body p {
+  font-family:
+    "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, "Times New Roman",
+    serif;
+  font-size: 18px;
+  line-height: 2;
+}
+
+.reader-article[data-typography="large"] .reader-body {
+  width: min(100%, 60ch);
+}
+
+.reader-article[data-typography="large"] .reader-body p {
+  font-size: 19px;
+  line-height: 2.05;
 }
 
 .source-panel {
