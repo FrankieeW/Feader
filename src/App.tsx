@@ -1018,47 +1018,58 @@ function App() {
             <section className="source-composer page-panel" aria-label="Add source">
               <div className="panel-heading">
                 <span>New source</span>
-                <span>{sourceInputMode === "rss" ? "RSS/Atom" : "XPath"}</span>
+                <span>{sourceInputModeLabel(sourceInputMode)}</span>
               </div>
               <form className="feed-form" onSubmit={handleAddFeed}>
-                <div className="source-mode" role="tablist" aria-label="Source type">
-                  {(["rss", "xpath"] as const).map((mode) => (
-                    <button
-                      className={sourceInputMode === mode ? "active" : ""}
-                      key={mode}
-                      onClick={() => setSourceInputMode(mode)}
-                      role="tab"
-                      type="button"
-                    >
-                      {mode === "rss" ? "RSS/Atom" : "XPath"}
+                <section className="adapter-workbench">
+                  <div className="adapter-rail" role="tablist" aria-label="Source type">
+                    {(["rss", "xpath"] as const).map((mode) => (
+                      <button
+                        className={sourceInputMode === mode ? "active" : ""}
+                        key={mode}
+                        onClick={() => setSourceInputMode(mode)}
+                        role="tab"
+                        type="button"
+                      >
+                        <strong>{sourceInputModeLabel(mode)}</strong>
+                        <span>{sourceInputModeKind(mode)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="adapter-panel">
+                    <input
+                      aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
+                      disabled={isBusy}
+                      onChange={(event) => setFeedUrl(event.currentTarget.value)}
+                      placeholder={
+                        sourceInputMode === "rss"
+                          ? "https://example.com/feed.xml"
+                          : "https://example.com/articles"
+                      }
+                      value={feedUrl}
+                    />
+                    {sourceInputMode === "xpath" ? (
+                      <XPathSourceForm
+                        isBusy={isBusy}
+                        onPreview={() => void handlePreviewXPath()}
+                        onSelectorsChange={setXPathSelectors}
+                        onTitleChange={setXPathTitle}
+                        preview={xpathPreview}
+                        selectors={xpathSelectors}
+                        title={xpathTitle}
+                      />
+                    ) : (
+                      <div className="adapter-summary" aria-label="RSS adapter status">
+                        <span>Native parser</span>
+                        <span>RSS</span>
+                        <span>Atom</span>
+                      </div>
+                    )}
+                    <button className="primary-action" disabled={isBusy} type="submit">
+                      {sourceInputMode === "rss" ? "Add source" : "Confirm source"}
                     </button>
-                  ))}
-                </div>
-                <input
-                  aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
-                  disabled={isBusy}
-                  onChange={(event) => setFeedUrl(event.currentTarget.value)}
-                  placeholder={
-                    sourceInputMode === "rss"
-                      ? "https://example.com/feed.xml"
-                      : "https://example.com/articles"
-                  }
-                  value={feedUrl}
-                />
-                {sourceInputMode === "xpath" ? (
-                  <XPathSourceForm
-                    isBusy={isBusy}
-                    onPreview={() => void handlePreviewXPath()}
-                    onSelectorsChange={setXPathSelectors}
-                    onTitleChange={setXPathTitle}
-                    preview={xpathPreview}
-                    selectors={xpathSelectors}
-                    title={xpathTitle}
-                  />
-                ) : null}
-                <button className="primary-action" disabled={isBusy} type="submit">
-                  {sourceInputMode === "rss" ? "Add source" : "Confirm source"}
-                </button>
+                  </div>
+                </section>
               </form>
             </section>
           ) : null}
@@ -1300,6 +1311,20 @@ function viewLabel(mode: ViewMode): string {
     return "Sources";
   }
   return "Settings";
+}
+
+function sourceInputModeLabel(mode: SourceInputMode): string {
+  if (mode === "xpath") {
+    return "XPath";
+  }
+  return "RSS/Atom";
+}
+
+function sourceInputModeKind(mode: SourceInputMode): string {
+  if (mode === "xpath") {
+    return "Declarative";
+  }
+  return "Native";
 }
 
 function articleDensityLabel(density: ArticleDensity): string {
