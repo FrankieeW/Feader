@@ -1188,6 +1188,26 @@ function App() {
                 <dd>Sticky</dd>
               </dl>
             </article>
+
+            <article className="settings-card">
+              <div className="panel-heading">
+                <span>Reading flow</span>
+                <span>{selectedArticle ? "Active" : "Idle"}</span>
+              </div>
+              <div className="preference-strip">
+                <span>{articles.length} queued</span>
+                <span>{selectedArticle ? "Article selected" : "No selection"}</span>
+                <span>{filterLabel(filterMode)}</span>
+              </div>
+              <dl>
+                <dt>Queue</dt>
+                <dd>{articles.length}</dd>
+                <dt>Selected</dt>
+                <dd>{selectedArticle?.title ?? "None"}</dd>
+                <dt>Filter</dt>
+                <dd>{filterLabel(filterMode)}</dd>
+              </dl>
+            </article>
           </section>
         </section>
       ) : null}
