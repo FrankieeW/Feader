@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import DOMPurify from "dompurify";
 import "./App.css";
 
 type Source = {
@@ -1970,61 +1971,15 @@ function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "").trim();
 }
 
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noreferrer");
+  }
+});
+
 function sanitizeArticleHtml(value: string): string {
-  const document = new DOMParser().parseFromString(value, "text/html");
-  document
-    .querySelectorAll(
-      "script, style, iframe, object, embed, form, input, button, select, textarea, link, meta, base",
-    )
-    .forEach((element) => element.remove());
-
-  document.body.querySelectorAll("*").forEach((element) => {
-    for (const attribute of [...element.attributes]) {
-      const name = attribute.name.toLowerCase();
-      if (name.startsWith("on") || name === "style" || name === "class" || name === "id") {
-        element.removeAttribute(attribute.name);
-        continue;
-      }
-
-      if ((name === "href" || name === "src") && !isAllowedArticleUrl(attribute.value, name)) {
-        element.removeAttribute(attribute.name);
-      }
-    }
-
-    if (element.tagName === "A") {
-      element.setAttribute("target", "_blank");
-      element.setAttribute("rel", "noreferrer");
-    }
-
-    if (element.tagName === "IMG" && !element.getAttribute("src")) {
-      element.remove();
-    }
-  });
-
-  document.body.querySelectorAll("p").forEach((paragraph) => {
-    if (!paragraph.textContent?.trim() && paragraph.children.length === 0) {
-      paragraph.remove();
-    }
-  });
-
-  return document.body.innerHTML.trim();
-}
-
-function isAllowedArticleUrl(value: string, attributeName: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  try {
-    const url = new URL(trimmed, window.location.origin);
-    if (attributeName === "href") {
-      return url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:";
-    }
-    return url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
+  return DOMPurify.sanitize(value, { USE_PROFILES: { html: true } });
 }
 
 export default App;
