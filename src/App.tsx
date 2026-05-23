@@ -703,7 +703,7 @@ function App() {
   }
 
   function handleArticleKeyDown(event: KeyboardEvent<HTMLElement>, articleId: number): void {
-    if (event.key !== "Enter" && event.key !== " ") {
+    if (event.key !== "Enter") {
       return;
     }
 
@@ -992,6 +992,10 @@ function App() {
                 key={article.id}
                 onKeyDown={(event) => handleArticleKeyDown(event, article.id)}
                 onClick={() => setSelectedArticleId(article.id)}
+                onDoubleClick={() => {
+                  setSelectedArticleId(article.id);
+                  setReaderView("immersive");
+                }}
                 role="button"
                 tabIndex={0}
               >
@@ -1361,6 +1365,30 @@ function App() {
             >
               x
             </button>
+            <ReaderArticle
+              article={selectedArticle}
+              onToggleRead={(item) => void handleToggleRead(item)}
+              onToggleSaved={(item) => void handleToggleSaved(item)}
+              readerTypography={readerTypography}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {readerView === "immersive" && selectedArticle ? (
+        <div aria-label="Immersive reader" aria-modal="true" className="immersive" role="dialog">
+          <div className="immersive-bar">
+            <span>{selectedArticle.sourceTitle}</span>
+            <button
+              aria-label="Exit immersive reading"
+              className="secondary-action"
+              onClick={() => setReaderView("none")}
+              type="button"
+            >
+              Close
+            </button>
+          </div>
+          <div className="immersive-body">
             <ReaderArticle
               article={selectedArticle}
               onToggleRead={(item) => void handleToggleRead(item)}

@@ -1267,6 +1267,32 @@ input:focus-visible,
   background: var(--color-panel);
 }
 
+.immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--color-bg);
+  animation: ql-fade 120ms ease;
+}
+
+.immersive-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--color-line-soft);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.immersive-body {
+  overflow: auto;
+  padding: 24px;
+}
+
 @keyframes ql-fade {
   from {
     opacity: 0;
