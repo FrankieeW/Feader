@@ -3,7 +3,7 @@
 ## Source of truth
 - Status: Active
 - Last refreshed: 2026-05-23
-- Primary product surfaces: Tauri desktop reader, source management, RSS/XPath source creation, article reading panel.
+- Primary product surfaces: Tauri desktop reader, source management, RSS/XPath source creation, Quick Look article preview, immersive reading.
 - Evidence reviewed: `README.md`, `docs/plugin-system.md`, `src/App.tsx`, `src/App.css`, `docs/superpowers/plans/2026-05-23-folo-hybrid-ui-redesign.md`, Folo GitHub source (`RSSNext/Folo`), MrRSS GitHub source (`WCY-dt/MrRSS`).
 
 ## External references
@@ -29,7 +29,7 @@
 - Key contexts of use: desktop knowledge work, repeated scanning, low-light reading, mixed system theme preferences.
 
 ## Information architecture
-- Primary navigation: far-left icon rail (Reader, Sources, Settings, quick theme), grouped/collapsible feed sidebar by category, center entry list, right reader panel.
+- Primary navigation: far-left icon rail (Reader, Sources, Settings, quick theme), grouped/collapsible feed sidebar by category, and a center entry list (two-column reader). Reading opens in a centered Quick Look preview (Space) or full-viewport immersive mode (double-click; Esc exits). Source management lives in the Sources view.
 - Core routes/screens: single desktop workspace first; source creation, XPath preview, reader, source health, and future plugin/script panels should remain reachable without leaving the workspace.
 - Content hierarchy: source health and filters first, article title/source/date second, full reading body/details third, AI/source extraction state fourth.
 
@@ -44,14 +44,14 @@
 ## Visual language
 - Color: neutral editorial surfaces with graphite structure and restrained copper/green accents; light/dark/system themes share semantic tokens and should avoid one-note blue/purple SaaS styling.
 - Typography: system UI sans for compact app chrome; strong but restrained headings; reader body uses a dedicated typography mode (system/serif/large) kept separate from app chrome.
-- Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and resizable sidebar/timeline splitters with persisted widths.
+- Spacing/layout rhythm: stable two-column desktop reader with compact source/list rows, overlay reading rhythm, and a persisted source sidebar width.
 - Shape/radius/elevation: medium-radius (12-14px) panels, subtle borders, no nested decorative cards.
 - Motion: minimal; hover/focus state only unless future settings allow reduced motion handling.
 - Imagery/iconography: no stock imagery; the icon rail uses a minimal hand-authored inline SVG set, while the rest of the app stays text-labeled unless another icon system is intentionally adopted.
 
 ## Components
-- Existing components to reuse: source rail, source mode selector, article card, filter tabs, reader panel, source panel, theme segmented control.
-- New/changed components: icon rail, collapsible category feed groups, List/Card entry layout, source category picker, command toolbar, source health row, AI/action strip, XPath/plugin configuration panel, empty/error/loading states with consistent icon treatment.
+- Existing components to reuse: source rail, source mode selector, article card, filter tabs, theme segmented control.
+- New/changed components: icon rail, collapsible category feed groups, List/Card entry layout, source category picker, Quick Look preview overlay, immersive reader, shared ReaderArticle, command toolbar, source health row, AI/action strip, XPath/plugin configuration panel, empty/error/loading states with consistent icon treatment.
 - Variants and states: selected, read, unread, saved, disabled, danger, error, warning, syncing, active tab, dark/light/system theme, source kind badge.
 - Token/component ownership: `src/App.css` owns CSS custom properties; `src/App.tsx` owns theme preference state.
 
@@ -64,7 +64,7 @@
 
 ## Responsive behavior
 - Supported breakpoints/devices: desktop-first Tauri window, tablet two-column, mobile single-column fallback.
-- Layout adaptations: reader panel moves below at medium widths; rails stack at narrow widths.
+- Layout adaptations: reader sidebar and entry list collapse into a single-column flow at narrow widths; overlays preserve the reading surface without adding another permanent pane.
 - Touch/hover differences: all controls remain text-labeled and at least 34px tall.
 
 ## Interaction states
@@ -74,6 +74,8 @@
 - Success: status line summarizes add/refresh/mark-read actions.
 - Disabled: opacity and cursor state.
 - Offline/slow network: refresh errors persist per source.
+- Preview: Space toggles a centered Quick Look for the selected article.
+- Immersive: double-click an entry; Esc exits (Esc closes immersive or preview).
 
 ## Content voice
 - Tone: concise, operational, technically precise.

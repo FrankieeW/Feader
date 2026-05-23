@@ -1415,4 +1415,10 @@ input:focus-visible,
   .story-card .story-actions {
     transition: none;
   }
+
+  .ql-backdrop,
+  .ql-panel,
+  .immersive {
+    animation: none;
+  }
 }
