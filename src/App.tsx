@@ -988,53 +988,12 @@ function App() {
       />
       <aside className="reader-panel" aria-label="Reader panel">
         {selectedArticle ? (
-          <article className="reader-article" data-typography={readerTypography}>
-            <div className="reader-kicker">
-              <span>{selectedArticle.sourceTitle}</span>
-              <span>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</span>
-            </div>
-            <h2>{selectedArticle.title}</h2>
-            {selectedArticle.author ? <p className="byline">{selectedArticle.author}</p> : null}
-            <div className="reader-actions">
-              <button onClick={() => void handleToggleRead(selectedArticle)} type="button">
-                {selectedArticle.read ? "Mark unread" : "Mark read"}
-              </button>
-              <button onClick={() => void handleToggleSaved(selectedArticle)} type="button">
-                {selectedArticle.saved ? "Unsave" : "Save"}
-              </button>
-              <a href={selectedArticle.url} rel="noreferrer" target="_blank">
-                Original
-              </a>
-            </div>
-            <dl className="reader-meta">
-              <dt>Source</dt>
-              <dd>{selectedArticle.sourceTitle}</dd>
-              <dt>Published</dt>
-              <dd>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</dd>
-              <dt>Body</dt>
-              <dd>{articleBodyState(selectedArticle)}</dd>
-              {selectedArticle.canonicalUrl ? (
-                <>
-                  <dt>Canonical</dt>
-                  <dd>{selectedArticle.canonicalUrl}</dd>
-                </>
-              ) : null}
-            </dl>
-            {selectedArticle.imageUrl ? (
-              <img alt="" className="reader-image" src={selectedArticle.imageUrl} />
-            ) : null}
-            <div className="reader-body">
-              {selectedArticle.contentText ? (
-                <p>{selectedArticle.contentText}</p>
-              ) : selectedArticle.contentHtml ? (
-                <p>{stripHtml(selectedArticle.contentHtml)}</p>
-              ) : selectedArticle.summary ? (
-                <p>{stripHtml(selectedArticle.summary)}</p>
-              ) : (
-                <p>{articleBodyFallback(selectedArticle)}</p>
-              )}
-            </div>
-          </article>
+          <ReaderArticle
+            article={selectedArticle}
+            onToggleRead={(item) => void handleToggleRead(item)}
+            onToggleSaved={(item) => void handleToggleSaved(item)}
+            readerTypography={readerTypography}
+          />
         ) : (
           <section className="empty-state">
             <h2>No article selected</h2>
@@ -1500,6 +1459,68 @@ function ReaderTypographyControl({
         </button>
       ))}
     </div>
+  );
+}
+
+function ReaderArticle({
+  article,
+  readerTypography,
+  onToggleRead,
+  onToggleSaved,
+}: {
+  article: Article;
+  readerTypography: ReaderTypography;
+  onToggleRead: (article: Article) => void;
+  onToggleSaved: (article: Article) => void;
+}) {
+  return (
+    <article className="reader-article" data-typography={readerTypography}>
+      <div className="reader-kicker">
+        <span>{article.sourceTitle}</span>
+        <span>{formatDate(article.publishedAt ?? article.createdAt)}</span>
+      </div>
+      <h2>{article.title}</h2>
+      {article.author ? <p className="byline">{article.author}</p> : null}
+      <div className="reader-actions">
+        <button onClick={() => onToggleRead(article)} type="button">
+          {article.read ? "Mark unread" : "Mark read"}
+        </button>
+        <button onClick={() => onToggleSaved(article)} type="button">
+          {article.saved ? "Unsave" : "Save"}
+        </button>
+        <a href={article.url} rel="noreferrer" target="_blank">
+          Original
+        </a>
+      </div>
+      <dl className="reader-meta">
+        <dt>Source</dt>
+        <dd>{article.sourceTitle}</dd>
+        <dt>Published</dt>
+        <dd>{formatDate(article.publishedAt ?? article.createdAt)}</dd>
+        <dt>Body</dt>
+        <dd>{articleBodyState(article)}</dd>
+        {article.canonicalUrl ? (
+          <>
+            <dt>Canonical</dt>
+            <dd>{article.canonicalUrl}</dd>
+          </>
+        ) : null}
+      </dl>
+      {article.imageUrl ? (
+        <img alt="" className="reader-image" src={article.imageUrl} />
+      ) : null}
+      <div className="reader-body">
+        {article.contentText ? (
+          <p>{article.contentText}</p>
+        ) : article.contentHtml ? (
+          <p>{stripHtml(article.contentHtml)}</p>
+        ) : article.summary ? (
+          <p>{stripHtml(article.summary)}</p>
+        ) : (
+          <p>{articleBodyFallback(article)}</p>
+        )}
+      </div>
+    </article>
   );
 }
 
