@@ -907,6 +907,7 @@ function App() {
           </div>
           {selectedSource ? (
             <>
+              <SourceHealthStrip source={selectedSource} />
               <form className="rename-form" onSubmit={handleRenameSource}>
                 <input
                   aria-label="Source title"
@@ -930,6 +931,8 @@ function App() {
                 <dd>{selectedSource.unreadCount}</dd>
                 <dt>Last refresh</dt>
                 <dd>{formatDate(selectedSource.lastFetchedAt)}</dd>
+                <dt>Status</dt>
+                <dd>{sourceDiagnostic(selectedSource)}</dd>
               </dl>
               {selectedSource.lastError ? (
                 <p className="error-text">{selectedSource.lastError}</p>
@@ -1029,15 +1032,22 @@ function App() {
                     <span>{source.title}</span>
                     <span>{sourceHealth(source)}</span>
                   </div>
+                  <SourceHealthStrip source={source} />
                   <dl>
                     <dt>Kind</dt>
                     <dd>{source.kind}</dd>
+                    <dt>URL</dt>
+                    <dd>{source.url}</dd>
+                    <dt>Enabled</dt>
+                    <dd>{source.enabled ? "Yes" : "No"}</dd>
                     <dt>Unread</dt>
                     <dd>{source.unreadCount}</dd>
                     <dt>Articles</dt>
                     <dd>{source.articleCount}</dd>
                     <dt>Last refresh</dt>
                     <dd>{formatDate(source.lastFetchedAt)}</dd>
+                    <dt>Status</dt>
+                    <dd>{sourceDiagnostic(source)}</dd>
                   </dl>
                   {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
                   <div className="story-actions">
@@ -1214,6 +1224,17 @@ function PaneResizer({
       role="separator"
       tabIndex={-1}
     />
+  );
+}
+
+function SourceHealthStrip({ source }: { source: Source }) {
+  return (
+    <div className="source-health-strip" aria-label={`${source.title} source health`}>
+      <span className={`health-chip ${sourceHealthClass(source)}`}>{sourceHealth(source)}</span>
+      <span>{source.kind.toUpperCase()}</span>
+      <span>{source.enabled ? "Enabled" : "Disabled"}</span>
+      <span>{formatDate(source.lastFetchedAt)}</span>
+    </div>
   );
 }
 
@@ -1497,6 +1518,26 @@ function sourceHealth(source: Source): string {
     return "Healthy";
   }
   return "New";
+}
+
+function sourceHealthClass(source: Source): string {
+  if (source.lastError) {
+    return "attention";
+  }
+  if (source.lastFetchedAt) {
+    return "healthy";
+  }
+  return "new";
+}
+
+function sourceDiagnostic(source: Source): string {
+  if (source.lastError) {
+    return source.lastError;
+  }
+  if (source.lastFetchedAt) {
+    return `Last refreshed ${formatDate(source.lastFetchedAt)}`;
+  }
+  return "Waiting for first refresh";
 }
 
 function formatDate(value?: string | null): string {
