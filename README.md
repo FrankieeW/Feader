@@ -52,4 +52,4 @@ See [docs/plugin-system.md](docs/plugin-system.md) for the initial architecture.
 
 ## Status
 
-This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation focus is the local-first core data flow: sources, RSS/Atom refresh, normalized articles, and read/saved state backed by SQLite.
+This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation includes local-first RSS/Atom source management, refresh status tracking, normalized articles, read/saved state, and a basic reader panel backed by SQLite.

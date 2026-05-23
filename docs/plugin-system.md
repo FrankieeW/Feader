@@ -17,7 +17,7 @@ Feader should treat RSS as the best path, not the only path. Many useful sources
 
 Use for standard RSS, Atom, JSON Feed, and OPML workflows.
 
-Implementation status: RSS and Atom parsing are the first live adapter path. JSON Feed and OPML remain follow-up work.
+Implementation status: RSS and Atom parsing are the first live adapter path, with source management and refresh error tracking backed by SQLite. JSON Feed and OPML remain follow-up work.
 
 Responsibilities:
 
