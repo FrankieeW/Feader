@@ -51,3 +51,6 @@ pnpm-debug.log*
 
 # Package artifacts
 *.tgz
+
+# Visual brainstorm companion
+.superpowers/
