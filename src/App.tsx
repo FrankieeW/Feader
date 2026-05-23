@@ -915,6 +915,8 @@ function App() {
               <dd>{selectedArticle.sourceTitle}</dd>
               <dt>Published</dt>
               <dd>{formatDate(selectedArticle.publishedAt ?? selectedArticle.createdAt)}</dd>
+              <dt>Body</dt>
+              <dd>{articleBodyState(selectedArticle)}</dd>
               {selectedArticle.canonicalUrl ? (
                 <>
                   <dt>Canonical</dt>
@@ -933,7 +935,7 @@ function App() {
               ) : selectedArticle.summary ? (
                 <p>{stripHtml(selectedArticle.summary)}</p>
               ) : (
-                <p>No local article body was provided by this feed.</p>
+                <p>{articleBodyFallback(selectedArticle)}</p>
               )}
             </div>
           </article>
@@ -1639,6 +1641,23 @@ function sourceDiagnostic(source: Source): string {
     return `Last refreshed ${formatDate(source.lastFetchedAt)}`;
   }
   return "Waiting for first refresh";
+}
+
+function articleBodyState(article: Article): string {
+  if (article.contentText) {
+    return "Text";
+  }
+  if (article.contentHtml) {
+    return "HTML";
+  }
+  if (article.summary) {
+    return "Summary";
+  }
+  return "Unavailable";
+}
+
+function articleBodyFallback(article: Article): string {
+  return `${article.sourceTitle} did not provide a local article body for this entry.`;
 }
 
 function formatDate(value?: string | null): string {
