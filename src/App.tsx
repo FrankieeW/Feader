@@ -52,6 +52,7 @@ type SourceRefreshResult = {
 
 type FilterMode = "all" | "unread" | "saved";
 type SourceInputMode = "rss" | "xpath";
+type ThemeMode = "light" | "dark" | "system";
 
 type XPathSelectors = {
   items: string;
@@ -84,6 +85,8 @@ const defaultXPathSelectors: XPathSelectors = {
   nextPage: "",
 };
 
+const themeStorageKey = "feader.theme";
+
 function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
@@ -91,6 +94,7 @@ function App() {
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
   const [feedUrl, setFeedUrl] = useState("");
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
@@ -113,6 +117,20 @@ function App() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    applyThemeMode(themeMode);
+    localStorage.setItem(themeStorageKey, themeMode);
+
+    if (themeMode !== "system") {
+      return;
+    }
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => applyThemeMode("system");
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [themeMode]);
 
   async function loadData(
     sourceId = selectedSourceId,
@@ -295,6 +313,8 @@ function App() {
             <span>{unreadCount} unread</span>
           </div>
         </div>
+
+        <ThemeControl mode={themeMode} onChange={setThemeMode} />
 
         <form className="feed-form" onSubmit={handleAddFeed}>
           <div className="source-mode" role="tablist" aria-label="Source type">
@@ -531,6 +551,58 @@ function App() {
       </aside>
     </main>
   );
+}
+
+function ThemeControl({
+  mode,
+  onChange,
+}: {
+  mode: ThemeMode;
+  onChange: (mode: ThemeMode) => void;
+}) {
+  return (
+    <div className="theme-control" role="group" aria-label="Theme">
+      {(["light", "dark", "system"] as const).map((theme) => (
+        <button
+          className={mode === theme ? "active" : ""}
+          key={theme}
+          onClick={() => onChange(theme)}
+          type="button"
+        >
+          {themeLabel(theme)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function themeLabel(mode: ThemeMode): string {
+  if (mode === "light") {
+    return "Light";
+  }
+  if (mode === "dark") {
+    return "Dark";
+  }
+  return "System";
+}
+
+function readInitialThemeMode(): ThemeMode {
+  const stored = localStorage.getItem(themeStorageKey);
+  if (stored === "light" || stored === "dark" || stored === "system") {
+    return stored;
+  }
+  return "system";
+}
+
+function applyThemeMode(mode: ThemeMode): void {
+  const resolved =
+    mode === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : mode;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = mode;
 }
 
 function buildArticleFilter(sourceId: number | undefined, mode: FilterMode): ArticleFilter | null {
