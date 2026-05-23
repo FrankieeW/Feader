@@ -1523,6 +1523,11 @@ function ReaderArticle({
   onToggleRead: (article: Article) => void;
   onToggleSaved: (article: Article) => void;
 }) {
+  const sanitizedHtml = useMemo(
+    () => (article.contentHtml ? sanitizeArticleHtml(article.contentHtml) : ""),
+    [article.contentHtml],
+  );
+
   return (
     <article className="reader-article" data-typography={readerTypography}>
       <div className="reader-kicker">
@@ -1560,10 +1565,10 @@ function ReaderArticle({
         <img alt="" className="reader-image" src={article.imageUrl} />
       ) : null}
       <div className="reader-body">
-        {article.contentText ? (
+        {sanitizedHtml ? (
+          <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
+        ) : article.contentText ? (
           <p>{article.contentText}</p>
-        ) : article.contentHtml ? (
-          <p>{stripHtml(article.contentHtml)}</p>
         ) : article.summary ? (
           <p>{stripHtml(article.summary)}</p>
         ) : (
@@ -1963,6 +1968,63 @@ function formatDate(value?: string | null): string {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "").trim();
+}
+
+function sanitizeArticleHtml(value: string): string {
+  const document = new DOMParser().parseFromString(value, "text/html");
+  document
+    .querySelectorAll(
+      "script, style, iframe, object, embed, form, input, button, select, textarea, link, meta, base",
+    )
+    .forEach((element) => element.remove());
+
+  document.body.querySelectorAll("*").forEach((element) => {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on") || name === "style" || name === "class" || name === "id") {
+        element.removeAttribute(attribute.name);
+        continue;
+      }
+
+      if ((name === "href" || name === "src") && !isAllowedArticleUrl(attribute.value, name)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+
+    if (element.tagName === "A") {
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noreferrer");
+    }
+
+    if (element.tagName === "IMG" && !element.getAttribute("src")) {
+      element.remove();
+    }
+  });
+
+  document.body.querySelectorAll("p").forEach((paragraph) => {
+    if (!paragraph.textContent?.trim() && paragraph.children.length === 0) {
+      paragraph.remove();
+    }
+  });
+
+  return document.body.innerHTML.trim();
+}
+
+function isAllowedArticleUrl(value: string, attributeName: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  try {
+    const url = new URL(trimmed, window.location.origin);
+    if (attributeName === "href") {
+      return url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:";
+    }
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 export default App;

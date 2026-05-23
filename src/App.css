@@ -1156,7 +1156,13 @@ input:focus-visible,
   word-break: auto-phrase;
 }
 
-.reader-body p {
+.reader-body,
+.reader-body p,
+.reader-body li,
+.reader-body blockquote,
+.reader-body figcaption,
+.reader-body td,
+.reader-body th {
   color: var(--color-text);
   font-family:
     "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei",
@@ -1169,7 +1175,160 @@ input:focus-visible,
   text-wrap: pretty;
 }
 
-.reader-article[data-typography="serif"] .reader-body p {
+.reader-body > div {
+  display: flow-root;
+}
+
+.reader-body :where(p, ul, ol, blockquote, pre, figure, table, hr) {
+  margin: 0 0 1.05em;
+}
+
+.reader-body :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1.45em 0 0.55em;
+  color: var(--color-heading);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-weight: 780;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.reader-body h1 {
+  font-size: 26px;
+}
+
+.reader-body h2 {
+  max-width: none;
+  font-size: 23px;
+}
+
+.reader-body :where(h3, h4, h5, h6) {
+  font-size: 19px;
+}
+
+.reader-body a {
+  color: var(--color-action);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.reader-body a:hover {
+  color: var(--color-action-hover);
+}
+
+.reader-body :where(ul, ol) {
+  display: grid;
+  gap: 0.45em;
+  padding-left: 1.35em;
+}
+
+.reader-body li > :where(p, ul, ol) {
+  margin-bottom: 0.45em;
+}
+
+.reader-body blockquote {
+  margin-left: 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-muted);
+}
+
+.reader-body blockquote :where(p, li) {
+  color: inherit;
+}
+
+.reader-body :where(code, pre) {
+  font-family:
+    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.reader-body code {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.08em 0.32em;
+  background: var(--color-panel-soft);
+  font-size: 0.9em;
+}
+
+.reader-body pre {
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
+}
+
+.reader-body pre code {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.reader-body :where(img, video) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.2em auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
+}
+
+.reader-body figure {
+  display: grid;
+  gap: 0.45em;
+}
+
+.reader-body figcaption {
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.reader-body table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+
+.reader-body :where(th, td) {
+  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.reader-body th {
+  color: var(--color-heading);
+  background: var(--color-panel-soft);
+  font-weight: 700;
+}
+
+.reader-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.reader-body > div > :first-child,
+.reader-body > :first-child {
+  margin-top: 0;
+}
+
+.reader-body > div > :last-child,
+.reader-body > :last-child {
+  margin-bottom: 0;
+}
+
+.reader-article[data-typography="serif"] .reader-body,
+.reader-article[data-typography="serif"] .reader-body p,
+.reader-article[data-typography="serif"] .reader-body li,
+.reader-article[data-typography="serif"] .reader-body blockquote,
+.reader-article[data-typography="serif"] .reader-body td,
+.reader-article[data-typography="serif"] .reader-body th {
   font-family:
     "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, "Times New Roman",
     serif;
@@ -1181,7 +1340,10 @@ input:focus-visible,
   width: min(100%, 60ch);
 }
 
-.reader-article[data-typography="large"] .reader-body p {
+.reader-article[data-typography="large"] .reader-body,
+.reader-article[data-typography="large"] .reader-body p,
+.reader-article[data-typography="large"] .reader-body li,
+.reader-article[data-typography="large"] .reader-body blockquote {
   font-size: 19px;
   line-height: 2.05;
 }
