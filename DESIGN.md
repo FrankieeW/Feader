@@ -4,7 +4,7 @@
 - Status: Active
 - Last refreshed: 2026-05-23
 - Primary product surfaces: Tauri desktop reader, source management, RSS/XPath source creation, article reading panel.
-- Evidence reviewed: `README.md`, `docs/plugin-system.md`, `src/App.tsx`, `src/App.css`, Folo GitHub source (`RSSNext/Folo`), MrRSS GitHub source (`WCY-dt/MrRSS`).
+- Evidence reviewed: `README.md`, `docs/plugin-system.md`, `src/App.tsx`, `src/App.css`, `docs/superpowers/plans/2026-05-23-folo-hybrid-ui-redesign.md`, Folo GitHub source (`RSSNext/Folo`), MrRSS GitHub source (`WCY-dt/MrRSS`).
 
 ## External references
 - Folo: desktop-grade reader architecture with a persistent subscription column, entry column, reader content area, command/search panels, AI chat surfaces, layout state persistence, and route-level separation between timeline, AI, discover/subview, and reader modes.
@@ -16,7 +16,7 @@
 ## Brand
 - Personality: focused, technical, calm, high-signal.
 - Trust signals: local-first data, explicit source adapters, visible refresh/error state, no decorative noise.
-- Avoid: marketing-style hero layouts, playful color overload, glassmorphism-heavy panels, crypto casino aesthetics.
+- Avoid: marketing-style hero layouts, playful color overload, glassmorphism-heavy panels, crypto casino aesthetics; soft skin tokens are acceptable when they remain flat, functional, and non-glassy.
 
 ## Product goals
 - Goals: make mixed RSS/XPath information streams easy to add, scan, triage, and read.
@@ -29,7 +29,7 @@
 - Key contexts of use: desktop knowledge work, repeated scanning, low-light reading, mixed system theme preferences.
 
 ## Information architecture
-- Primary navigation: left source rail, center article queue, right reader/details panel; later add command palette/search and optional AI side panel.
+- Primary navigation: far-left icon rail (Reader, Sources, Settings, quick theme), grouped/collapsible feed sidebar by category, center entry list, right reader panel.
 - Core routes/screens: single desktop workspace first; source creation, XPath preview, reader, source health, and future plugin/script panels should remain reachable without leaving the workspace.
 - Content hierarchy: source health and filters first, article title/source/date second, full reading body/details third, AI/source extraction state fourth.
 
@@ -45,13 +45,13 @@
 - Color: neutral editorial surfaces with graphite structure and restrained copper/green accents; light/dark/system themes share semantic tokens and should avoid one-note blue/purple SaaS styling.
 - Typography: system UI sans for compact app chrome; strong but restrained headings; reader body uses a dedicated typography mode (system/serif/large) kept separate from app chrome.
 - Spacing/layout rhythm: stable three-column desktop grid with compact source/list rows, larger reader rhythm, and resizable sidebar/timeline splitters with persisted widths.
-- Shape/radius/elevation: low-radius panels, subtle borders, no nested decorative cards.
+- Shape/radius/elevation: medium-radius (12-14px) panels, subtle borders, no nested decorative cards.
 - Motion: minimal; hover/focus state only unless future settings allow reduced motion handling.
 - Imagery/iconography: no stock imagery; use text labels until an icon system is intentionally adopted.
 
 ## Components
 - Existing components to reuse: source rail, source mode selector, article card, filter tabs, reader panel, source panel, theme segmented control.
-- New/changed components: command toolbar, source health row, compact article queue item, AI/action strip, XPath/plugin configuration panel, empty/error/loading states with consistent icon treatment.
+- New/changed components: icon rail, collapsible category feed groups, List/Card entry layout, source category picker, command toolbar, source health row, AI/action strip, XPath/plugin configuration panel, empty/error/loading states with consistent icon treatment.
 - Variants and states: selected, read, unread, saved, disabled, danger, error, warning, syncing, active tab, dark/light/system theme, source kind badge.
 - Token/component ownership: `src/App.css` owns CSS custom properties; `src/App.tsx` owns theme preference state.
 
@@ -89,5 +89,5 @@
 - Test/screenshot expectations: run build checks; use browser verification when the in-app browser is available.
 
 ## Open questions
-- [ ] Whether Feader should later adopt an icon library such as Lucide for denser command buttons / owner: product / impact: medium.
+- [x] Adopted a minimal hand-authored inline SVG icon set for the rail (no dependency) / owner: product / impact: medium.
 - [x] Reader typography offers system/serif/large article modes (shipped) / owner: product / impact: low.
