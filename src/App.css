@@ -102,7 +102,7 @@ input:disabled {
   overflow: hidden;
   --sidebar-width: 240px;
   --timeline-width: 520px;
-  grid-template-columns: 54px minmax(220px, var(--sidebar-width)) 10px minmax(360px, var(--timeline-width)) 10px minmax(0, 1fr);
+  grid-template-columns: 54px minmax(220px, var(--sidebar-width)) 10px minmax(0, 1fr);
   background:
     radial-gradient(circle at 18% 0, var(--color-bg-accent), transparent 34%),
     linear-gradient(180deg, var(--color-bg), var(--color-panel-muted));
@@ -113,8 +113,7 @@ input:disabled {
 }
 
 .sidebar,
-.timeline,
-.reader-panel {
+.timeline {
   min-width: 0;
   padding: 20px;
 }
@@ -250,8 +249,6 @@ input:disabled {
 .story-meta,
 .reader-kicker,
 .byline,
-.source-panel dd,
-.source-panel p,
 .xpath-preview span,
 .source-stats span,
 .queue-metrics,
@@ -310,7 +307,6 @@ input:disabled {
 
 .source-stats div,
 .source-composer,
-.source-panel,
 .empty-state {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -666,16 +662,8 @@ input:disabled {
   grid-column: 4;
 }
 
-.app-shell[data-view="reader"] .reader-panel {
-  grid-column: 6;
-}
-
 .app-shell[data-view="reader"] .pane-resizer:first-of-type {
   grid-column: 3;
-}
-
-.app-shell[data-view="reader"] .pane-resizer:last-of-type {
-  grid-column: 5;
 }
 
 .app-shell:not([data-view="reader"]) .sidebar {
@@ -912,6 +900,11 @@ input:focus-visible,
   padding: 2px 4px 16px 0;
 }
 
+.timeline .story-list {
+  width: min(100%, 760px);
+  margin-inline: auto;
+}
+
 .story-card {
   position: relative;
   display: grid;
@@ -1087,15 +1080,6 @@ input:focus-visible,
   grid-area: actions;
 }
 
-.reader-panel {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  background: color-mix(in srgb, var(--color-panel-strong) 54%, transparent);
-  overflow: auto;
-}
-
-.source-panel,
 .empty-state {
   padding: 18px;
 }
@@ -1202,32 +1186,6 @@ input:focus-visible,
   line-height: 2.05;
 }
 
-.source-panel {
-  display: grid;
-  width: min(100%, 760px);
-  gap: 12px;
-  margin: 0 auto;
-}
-
-.source-panel dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 9px 14px;
-  margin: 0;
-}
-
-.source-panel dt {
-  color: var(--color-heading);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.source-panel dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .ql-backdrop {
   position: fixed;
   inset: 0;
@@ -1320,7 +1278,7 @@ input:focus-visible,
 
 @media (max-width: 1160px) {
   .app-shell[data-view="reader"] {
-    grid-template-columns: 54px minmax(204px, var(--sidebar-width)) 10px minmax(360px, var(--timeline-width)) 10px minmax(0, 1fr);
+    grid-template-columns: 54px minmax(204px, var(--sidebar-width)) 10px minmax(0, 1fr);
   }
 
   .topbar-actions {
@@ -1348,18 +1306,13 @@ input:focus-visible,
   }
 
   .sidebar,
-  .timeline,
-  .reader-panel {
+  .timeline {
     padding: 18px;
   }
 
   .sidebar {
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
-  }
-
-  .reader-panel {
-    grid-template-columns: 1fr;
   }
 
   .timeline {
@@ -1372,7 +1325,6 @@ input:focus-visible,
 
   .app-shell[data-view="reader"] .sidebar,
   .app-shell[data-view="reader"] .timeline,
-  .app-shell[data-view="reader"] .reader-panel,
   .app-shell:not([data-view="reader"]) .sidebar,
   .app-shell:not([data-view="reader"]) .page-view {
     grid-column: 1;

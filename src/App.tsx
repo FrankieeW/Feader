@@ -429,7 +429,6 @@ function App() {
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<ParsedArticle[]>([]);
-  const [editingTitle, setEditingTitle] = useState("");
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
 
@@ -568,7 +567,6 @@ function App() {
 
   async function handleSelectSource(sourceId?: number): Promise<void> {
     setSelectedSourceId(sourceId);
-    setEditingTitle("");
     await loadData(sourceId, filterMode, undefined);
   }
 
@@ -598,48 +596,11 @@ function App() {
     });
   }
 
-  async function handleRenameSource(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!selectedSource) {
-      return;
-    }
-
-    await runTask("Renaming feed", async () => {
-      await invoke<Source>("update_source_title", {
-        request: {
-          sourceId: selectedSource.id,
-          title: editingTitle || selectedSource.title,
-        },
-      });
-      setEditingTitle("");
-      await loadData(selectedSourceId, filterMode, selectedArticleId);
-      setStatus("Feed renamed");
-    });
-  }
-
   async function handleSetCategory(sourceId: number, category: string): Promise<void> {
     await runTask("Updating category", async () => {
       await invoke<Source>("set_source_category", { sourceId, category });
       await loadData(selectedSourceId, filterMode, selectedArticleId);
       setStatus("Category updated");
-    });
-  }
-
-  async function handleDeleteSource(): Promise<void> {
-    if (!selectedSource) {
-      return;
-    }
-    const confirmed = window.confirm(`Delete "${selectedSource.title}" and its articles?`);
-    if (!confirmed) {
-      return;
-    }
-
-    await runTask("Deleting feed", async () => {
-      await invoke("delete_source", { sourceId: selectedSource.id });
-      setSelectedSourceId(undefined);
-      setSelectedArticleId(undefined);
-      await loadData(undefined, filterMode, undefined);
-      setStatus("Feed deleted");
     });
   }
 
@@ -1040,81 +1001,6 @@ function App() {
         </div>
       </section>
 
-      <PaneResizer
-        label="Resize reader panel"
-        onPointerDown={(event) => handlePaneResizeStart("timeline", event)}
-      />
-      <aside className="reader-panel" aria-label="Reader panel">
-        {selectedArticle ? (
-          <ReaderArticle
-            article={selectedArticle}
-            onToggleRead={(item) => void handleToggleRead(item)}
-            onToggleSaved={(item) => void handleToggleSaved(item)}
-            readerTypography={readerTypography}
-          />
-        ) : (
-          <section className="empty-state">
-            <h2>No article selected</h2>
-            <p>Select an article from the queue.</p>
-          </section>
-        )}
-
-        <section className="source-panel">
-          <div className="panel-heading">
-            <span>Source</span>
-            <span>{selectedSource ? sourceHealth(selectedSource) : "All feeds"}</span>
-          </div>
-          {selectedSource ? (
-            <>
-              <SourceHealthStrip source={selectedSource} />
-              <CategoryPicker
-                disabled={isBusy}
-                onSubmit={(id, category) => void handleSetCategory(id, category)}
-                source={selectedSource}
-              />
-              <form className="rename-form" onSubmit={handleRenameSource}>
-                <input
-                  aria-label="Source title"
-                  disabled={isBusy}
-                  onChange={(event) => setEditingTitle(event.currentTarget.value)}
-                  placeholder={selectedSource.title}
-                  value={editingTitle}
-                />
-                <button disabled={isBusy} type="submit">
-                  Rename
-                </button>
-              </form>
-              <dl>
-                <dt>URL</dt>
-                <dd>{selectedSource.url}</dd>
-                <dt>Kind</dt>
-                <dd>{selectedSource.kind}</dd>
-                <dt>Articles</dt>
-                <dd>{selectedSource.articleCount}</dd>
-                <dt>Unread</dt>
-                <dd>{selectedSource.unreadCount}</dd>
-                <dt>Last refresh</dt>
-                <dd>{formatDate(selectedSource.lastFetchedAt)}</dd>
-                <dt>Status</dt>
-                <dd>{sourceDiagnostic(selectedSource)}</dd>
-              </dl>
-              {selectedSource.lastError ? (
-                <p className="error-text">{selectedSource.lastError}</p>
-              ) : null}
-              <button
-                className="danger-action"
-                disabled={isBusy}
-                onClick={handleDeleteSource}
-                type="button"
-              >
-                Delete feed
-              </button>
-            </>
-          ) : (
-            <p>All feeds selected.</p>
-          )}
-        </section>
-      </aside>
         </>
       ) : null}
 
