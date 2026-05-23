@@ -1,4 +1,5 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -54,6 +55,13 @@ type FilterMode = "all" | "unread" | "saved";
 type SourceInputMode = "rss" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
 type ViewMode = "reader" | "sources" | "settings";
+type ArticleDensity = "comfortable" | "compact";
+type PaneKey = "sidebar" | "timeline";
+
+type PaneWidths = {
+  sidebar: number;
+  timeline: number;
+};
 
 type XPathSelectors = {
   items: string;
@@ -87,7 +95,17 @@ const defaultXPathSelectors: XPathSelectors = {
 };
 
 const themeStorageKey = "feader.theme";
+const densityStorageKey = "feader.articleDensity";
+const paneStorageKey = "feader.paneWidths";
 const builtInTestFeedUrl = "https://www.appinn.com/feed/";
+const defaultPaneWidths: PaneWidths = {
+  sidebar: 240,
+  timeline: 520,
+};
+const paneBounds: Record<PaneKey, { min: number; max: number }> = {
+  sidebar: { min: 220, max: 300 },
+  timeline: { min: 360, max: 620 },
+};
 
 const testModeSources: Source[] = [
   {
@@ -269,7 +287,9 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
     case "delete_source": {
       const sourceId = Number(args?.sourceId);
       testModeSourceState = testModeSourceState.filter((source) => source.id !== sourceId);
-      testModeArticleState = testModeArticleState.filter((article) => article.sourceId !== sourceId);
+      testModeArticleState = testModeArticleState.filter(
+        (article) => article.sourceId !== sourceId,
+      );
       return undefined as T;
     }
     case "preview_xpath_source":
@@ -352,6 +372,10 @@ function App() {
   const [activeView, setActiveView] = useState<ViewMode>("reader");
   const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
+  const [articleDensity, setArticleDensity] = useState<ArticleDensity>(() =>
+    readInitialArticleDensity(),
+  );
+  const [paneWidths, setPaneWidths] = useState<PaneWidths>(() => readInitialPaneWidths());
   const [feedUrl, setFeedUrl] = useState("");
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
@@ -390,6 +414,14 @@ function App() {
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
   }, [themeMode]);
+
+  useEffect(() => {
+    localStorage.setItem(densityStorageKey, articleDensity);
+  }, [articleDensity]);
+
+  useEffect(() => {
+    localStorage.setItem(paneStorageKey, JSON.stringify(paneWidths));
+  }, [paneWidths]);
 
   async function loadData(
     sourceId = selectedSourceId,
@@ -560,6 +592,35 @@ function App() {
     setSelectedArticleId(articleId);
   }
 
+  function handlePaneResizeStart(pane: PaneKey, event: PointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = paneWidths[pane];
+
+    function handlePointerMove(moveEvent: globalThis.PointerEvent): void {
+      const nextWidth = startWidth + moveEvent.clientX - startX;
+      setPaneWidths((current) => ({
+        ...current,
+        [pane]: clamp(nextWidth, paneBounds[pane].min, paneBounds[pane].max),
+      }));
+    }
+
+    function handlePointerUp(): void {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
+  function handleResetWorkspaceLayout(): void {
+    setPaneWidths(defaultPaneWidths);
+    setArticleDensity("comfortable");
+    localStorage.removeItem(paneStorageKey);
+    localStorage.removeItem(densityStorageKey);
+  }
+
   async function runTask(label: string, task: () => Promise<void>): Promise<void> {
     setIsBusy(true);
     setStatus(label);
@@ -572,8 +633,13 @@ function App() {
     }
   }
 
+  const shellStyle = {
+    "--sidebar-width": `${paneWidths.sidebar}px`,
+    "--timeline-width": `${paneWidths.timeline}px`,
+  } as CSSProperties;
+
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-view={activeView} style={shellStyle}>
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="brand">
@@ -664,6 +730,10 @@ function App() {
 
       {activeView === "reader" ? (
         <>
+      <PaneResizer
+        label="Resize source sidebar"
+        onPointerDown={(event) => handlePaneResizeStart("sidebar", event)}
+      />
       <section className="timeline" aria-label="Reading queue">
         <header className="topbar">
           <div>
@@ -708,10 +778,11 @@ function App() {
               </button>
             ))}
           </div>
+          <DensityControl density={articleDensity} onChange={setArticleDensity} />
           <div className="status-line">{status}</div>
         </div>
 
-        <div className="story-list">
+        <div className={`story-list ${articleDensity}`}>
           {articles.length === 0 ? (
             <section className="empty-state">
               <h2>No articles</h2>
@@ -762,6 +833,10 @@ function App() {
         </div>
       </section>
 
+      <PaneResizer
+        label="Resize reader panel"
+        onPointerDown={(event) => handlePaneResizeStart("timeline", event)}
+      />
       <aside className="reader-panel" aria-label="Reader panel">
         {selectedArticle ? (
           <article className="reader-article">
@@ -988,8 +1063,9 @@ function App() {
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Workspace</span>
-                <span>{viewLabel(activeView)}</span>
+                <span>{articleDensityLabel(articleDensity)}</span>
               </div>
+              <DensityControl density={articleDensity} onChange={setArticleDensity} />
               <dl>
                 <dt>Sources</dt>
                 <dd>{sources.length}</dd>
@@ -997,7 +1073,14 @@ function App() {
                 <dd>{unreadCount}</dd>
                 <dt>Alerts</dt>
                 <dd>{failedSourceCount}</dd>
+                <dt>Sidebar</dt>
+                <dd>{paneWidths.sidebar}px</dd>
+                <dt>Timeline</dt>
+                <dd>{paneWidths.timeline}px</dd>
               </dl>
+              <button className="secondary-action" onClick={handleResetWorkspaceLayout} type="button">
+                Reset workspace layout
+              </button>
             </article>
           </section>
         </section>
@@ -1029,6 +1112,47 @@ function ThemeControl({
   );
 }
 
+function DensityControl({
+  density,
+  onChange,
+}: {
+  density: ArticleDensity;
+  onChange: (density: ArticleDensity) => void;
+}) {
+  return (
+    <div className="density-control" role="group" aria-label="Article density">
+      {(["comfortable", "compact"] as const).map((nextDensity) => (
+        <button
+          className={density === nextDensity ? "active" : ""}
+          key={nextDensity}
+          onClick={() => onChange(nextDensity)}
+          type="button"
+        >
+          {articleDensityLabel(nextDensity)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PaneResizer({
+  label,
+  onPointerDown,
+}: {
+  label: string;
+  onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      aria-label={label}
+      className="pane-resizer"
+      onPointerDown={onPointerDown}
+      role="separator"
+      tabIndex={-1}
+    />
+  );
+}
+
 function themeLabel(mode: ThemeMode): string {
   if (mode === "light") {
     return "Light";
@@ -1049,12 +1173,52 @@ function viewLabel(mode: ViewMode): string {
   return "Settings";
 }
 
+function articleDensityLabel(density: ArticleDensity): string {
+  if (density === "compact") {
+    return "Compact";
+  }
+  return "Comfortable";
+}
+
 function readInitialThemeMode(): ThemeMode {
   const stored = localStorage.getItem(themeStorageKey);
   if (stored === "light" || stored === "dark" || stored === "system") {
     return stored;
   }
   return "system";
+}
+
+function readInitialArticleDensity(): ArticleDensity {
+  const stored = localStorage.getItem(densityStorageKey);
+  if (stored === "compact" || stored === "comfortable") {
+    return stored;
+  }
+  return "comfortable";
+}
+
+function readInitialPaneWidths(): PaneWidths {
+  const stored = localStorage.getItem(paneStorageKey);
+  if (!stored) {
+    return defaultPaneWidths;
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<PaneWidths>;
+    return {
+      sidebar: clamp(
+        parsed.sidebar ?? defaultPaneWidths.sidebar,
+        paneBounds.sidebar.min,
+        paneBounds.sidebar.max,
+      ),
+      timeline: clamp(
+        parsed.timeline ?? defaultPaneWidths.timeline,
+        paneBounds.timeline.min,
+        paneBounds.timeline.max,
+      ),
+    };
+  } catch {
+    return defaultPaneWidths;
+  }
 }
 
 function applyThemeMode(mode: ThemeMode): void {
@@ -1066,6 +1230,10 @@ function applyThemeMode(mode: ThemeMode): void {
       : mode;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = mode;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function buildArticleFilter(sourceId: number | undefined, mode: FilterMode): ArticleFilter | null {
