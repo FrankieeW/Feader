@@ -601,6 +601,45 @@ function App() {
     setSelectedArticleId(articleId);
   }
 
+  function handleAppKeyDown(event: KeyboardEvent<HTMLElement>): void {
+    if (activeView !== "reader" || isTextInputTarget(event.target)) {
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      selectRelativeArticle(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+
+    if (!selectedArticle || event.metaKey || event.ctrlKey || event.altKey) {
+      return;
+    }
+
+    if (event.key.toLowerCase() === "r") {
+      event.preventDefault();
+      void handleToggleRead(selectedArticle);
+    }
+
+    if (event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void handleToggleSaved(selectedArticle);
+    }
+  }
+
+  function selectRelativeArticle(offset: number): void {
+    if (articles.length === 0) {
+      return;
+    }
+
+    const currentIndex = Math.max(
+      0,
+      articles.findIndex((article) => article.id === selectedArticle?.id),
+    );
+    const nextIndex = clamp(currentIndex + offset, 0, articles.length - 1);
+    setSelectedArticleId(articles[nextIndex].id);
+  }
+
   function handlePaneResizeStart(pane: PaneKey, event: PointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -648,7 +687,12 @@ function App() {
   } as CSSProperties;
 
   return (
-    <main className="app-shell" data-view={activeView} style={shellStyle}>
+    <main
+      className="app-shell"
+      data-view={activeView}
+      onKeyDown={handleAppKeyDown}
+      style={shellStyle}
+    >
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="brand">
@@ -1337,6 +1381,18 @@ function applyThemeMode(mode: ThemeMode): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.isContentEditable
+  );
 }
 
 function buildArticleFilter(sourceId: number | undefined, mode: FilterMode): ArticleFilter | null {
