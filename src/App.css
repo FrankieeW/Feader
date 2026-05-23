@@ -1,30 +1,30 @@
 :root {
   color-scheme: light;
-  --color-bg: #eef1ed;
-  --color-bg-accent: rgba(179, 80, 46, 0.08);
-  --color-panel: rgba(255, 255, 255, 0.78);
+  --color-bg: #f5efea;
+  --color-bg-accent: rgba(18, 46, 138, 0.1);
+  --color-panel: rgba(255, 252, 248, 0.82);
   --color-panel-strong: #ffffff;
-  --color-panel-soft: rgba(247, 249, 246, 0.72);
-  --color-panel-muted: #edf2ed;
-  --color-text: #162019;
-  --color-heading: #111813;
-  --color-muted: #637168;
-  --color-faint: #89958c;
-  --color-border: #d5ddd4;
-  --color-border-strong: #b8c5bb;
-  --color-brand: #1f3328;
+  --color-panel-soft: rgba(245, 239, 234, 0.74);
+  --color-panel-muted: #ece4dc;
+  --color-text: #1f263f;
+  --color-heading: #122e8a;
+  --color-muted: #66708a;
+  --color-faint: #9198a8;
+  --color-border: #ddd3ca;
+  --color-border-strong: #b8b1c0;
+  --color-brand: #122e8a;
   --color-brand-contrast: #ffffff;
-  --color-action: #b65334;
-  --color-action-hover: #984128;
-  --color-action-contrast: #fffdf8;
-  --color-success: #2f7b55;
-  --color-warning: #a97824;
-  --color-danger: #922f24;
+  --color-action: #122e8a;
+  --color-action-hover: #0d236b;
+  --color-action-contrast: #f5efea;
+  --color-success: #287254;
+  --color-warning: #9b6b18;
+  --color-danger: #a32846;
   --color-danger-bg: #fff5f2;
-  --color-danger-border: #e6b8af;
-  --color-selected-ring: rgba(182, 83, 52, 0.2);
-  --shadow-panel: 0 18px 44px rgba(36, 48, 39, 0.08);
-  --shadow-soft: 0 10px 28px rgba(36, 48, 39, 0.06);
+  --color-danger-border: #edb4c2;
+  --color-selected-ring: rgba(18, 46, 138, 0.2);
+  --shadow-panel: 0 18px 44px rgba(18, 46, 138, 0.09);
+  --shadow-soft: 0 10px 28px rgba(39, 45, 72, 0.07);
   color: var(--color-text);
   background: var(--color-bg);
   font-family:
@@ -38,29 +38,29 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg: #101412;
-  --color-bg-accent: rgba(214, 109, 71, 0.1);
-  --color-panel: rgba(24, 30, 27, 0.84);
-  --color-panel-strong: #1f2622;
-  --color-panel-soft: rgba(32, 39, 35, 0.68);
-  --color-panel-muted: #171d1a;
-  --color-text: #e7eee7;
-  --color-heading: #f7faf4;
-  --color-muted: #a4b1a8;
-  --color-faint: #75827a;
-  --color-border: #333f38;
-  --color-border-strong: #536158;
-  --color-brand: #dbe6d7;
-  --color-brand-contrast: #111611;
-  --color-action: #d66d47;
-  --color-action-hover: #ec835c;
-  --color-action-contrast: #170f0b;
-  --color-success: #82c69b;
-  --color-warning: #d5a855;
-  --color-danger: #ff9a83;
-  --color-danger-bg: #38211d;
-  --color-danger-border: #704238;
-  --color-selected-ring: rgba(214, 109, 71, 0.28);
+  --color-bg: #1a1a1d;
+  --color-bg-accent: rgba(230, 57, 124, 0.14);
+  --color-panel: rgba(35, 35, 40, 0.86);
+  --color-panel-strong: #24242a;
+  --color-panel-soft: rgba(48, 45, 53, 0.72);
+  --color-panel-muted: #202027;
+  --color-text: #f4edf1;
+  --color-heading: #ffffff;
+  --color-muted: #b9aeb5;
+  --color-faint: #8c838a;
+  --color-border: #3d3840;
+  --color-border-strong: #62545f;
+  --color-brand: #e6397c;
+  --color-brand-contrast: #1a1a1d;
+  --color-action: #e6397c;
+  --color-action-hover: #ff5a98;
+  --color-action-contrast: #1a1a1d;
+  --color-success: #7ad49d;
+  --color-warning: #e7b85a;
+  --color-danger: #ff8ead;
+  --color-danger-bg: #3a202c;
+  --color-danger-border: #7c3b55;
+  --color-selected-ring: rgba(230, 57, 124, 0.3);
   --shadow-panel: 0 18px 54px rgba(0, 0, 0, 0.28);
   --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.2);
 }
@@ -89,7 +89,7 @@ input:disabled {
 .app-shell {
   display: grid;
   min-height: 100vh;
-  grid-template-columns: minmax(250px, 292px) minmax(390px, 1fr) minmax(360px, 456px);
+  grid-template-columns: minmax(220px, 260px) minmax(320px, 0.72fr) minmax(520px, 1.35fr);
   background:
     radial-gradient(circle at 18% 0, var(--color-bg-accent), transparent 34%),
     linear-gradient(180deg, var(--color-bg), var(--color-panel-muted));
@@ -99,7 +99,7 @@ input:disabled {
 .timeline,
 .reader-panel {
   min-width: 0;
-  padding: 22px;
+  padding: 20px;
 }
 
 .sidebar {
@@ -223,7 +223,6 @@ input:disabled {
 .source-stats div,
 .source-composer,
 .story-card,
-.reader-article,
 .source-panel,
 .empty-state {
   border: 1px solid var(--color-border);
@@ -478,15 +477,6 @@ input:disabled {
   max-width: 760px;
 }
 
-.icon-action {
-  display: grid;
-  min-width: 42px;
-  padding: 0 14px;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-}
-
 .source-grid,
 .settings-grid {
   display: grid;
@@ -590,6 +580,15 @@ button:hover,
   border-color: var(--color-border-strong);
 }
 
+button:focus-visible,
+input:focus-visible,
+.story-card:focus-visible,
+.story-actions a:focus-visible,
+.reader-actions a:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--color-selected-ring);
+}
+
 .primary-action {
   min-height: 38px;
   border: 0;
@@ -607,6 +606,10 @@ button:hover,
 
 .compact-action {
   width: auto;
+}
+
+.add-source-action {
+  min-width: 156px;
 }
 
 .danger-action {
@@ -636,8 +639,8 @@ button:hover,
 .story-card {
   position: relative;
   display: grid;
-  gap: 8px;
-  padding: 14px 14px 14px 18px;
+  gap: 7px;
+  padding: 12px 12px 12px 16px;
   cursor: pointer;
 }
 
@@ -660,6 +663,10 @@ button:hover,
 
 .story-card.selected::before {
   background: var(--color-action);
+}
+
+.story-card:focus-visible {
+  border-color: var(--color-action);
 }
 
 .story-card.read {
@@ -700,7 +707,7 @@ button:hover,
 .story-card h2 {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 19px;
+  font-size: 17px;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -710,21 +717,40 @@ button:hover,
   overflow: hidden;
   margin-bottom: 2px;
   color: var(--color-text);
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.story-card .story-actions {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    max-height 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.story-card:hover .story-actions,
+.story-card:focus-within .story-actions,
+.story-card.selected .story-actions {
+  max-height: 44px;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .reader-panel {
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: 14px;
   border-left: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+  background: color-mix(in srgb, var(--color-panel-strong) 54%, transparent);
   overflow: auto;
 }
 
-.reader-article,
 .source-panel,
 .empty-state {
   padding: 18px;
@@ -732,35 +758,42 @@ button:hover,
 
 .reader-article {
   display: grid;
-  gap: 14px;
+  width: min(100%, 760px);
+  gap: 16px;
+  margin: 0 auto;
+  padding: 12px 8px 20px;
 }
 
 .reader-article h2 {
-  font-size: 25px;
+  max-width: 22ch;
+  font-size: 34px;
+  line-height: 1.12;
 }
 
 .reader-actions {
-  padding: 8px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-panel-soft);
 }
 
 .reader-body {
-  max-height: 52vh;
-  overflow: auto;
   padding-right: 4px;
 }
 
 .reader-body p {
   color: var(--color-text);
-  font-size: 15px;
-  line-height: 1.72;
+  font-size: 16px;
+  line-height: 1.78;
 }
 
 .source-panel {
   display: grid;
+  width: min(100%, 760px);
   gap: 12px;
+  margin: 0 auto;
 }
 
 .source-panel dl {
@@ -789,18 +822,15 @@ button:hover,
 
 @media (max-width: 1160px) {
   .app-shell {
-    grid-template-columns: minmax(230px, 270px) minmax(0, 1fr);
+    grid-template-columns: minmax(204px, 228px) minmax(280px, 0.68fr) minmax(430px, 1fr);
   }
 
   .reader-panel {
-    grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.75fr);
-    border-top: 1px solid var(--color-border);
-    border-left: 0;
+    border-left: 1px solid var(--color-border);
   }
 
   .page-view {
-    grid-column: 2;
+    grid-column: 2 / -1;
   }
 
   .source-grid,
@@ -809,7 +839,7 @@ button:hover,
   }
 }
 
-@media (max-width: 820px) {
+@media (max-width: 960px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -827,6 +857,16 @@ button:hover,
 
   .reader-panel {
     grid-template-columns: 1fr;
+  }
+
+  .reader-article {
+    width: 100%;
+    padding: 0;
+  }
+
+  .reader-article h2 {
+    max-width: none;
+    font-size: 28px;
   }
 
   .page-view {

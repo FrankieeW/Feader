@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 type Source = {
@@ -87,6 +87,260 @@ const defaultXPathSelectors: XPathSelectors = {
 };
 
 const themeStorageKey = "feader.theme";
+const builtInTestFeedUrl = "https://www.appinn.com/feed/";
+
+const testModeSources: Source[] = [
+  {
+    id: 1,
+    kind: "rss",
+    title: "小众软件",
+    url: builtInTestFeedUrl,
+    enabled: true,
+    createdAt: "2026-05-23T08:00:00.000Z",
+    lastFetchedAt: "2026-05-23T08:00:00.000Z",
+    lastError: null,
+    articleCount: 5,
+    unreadCount: 4,
+  },
+];
+
+const testModeArticles: Article[] = [
+  {
+    id: 1,
+    sourceId: 1,
+    sourceTitle: "小众软件",
+    externalId: "appinn-test-1",
+    title: "小众软件 RSS 测试源已接入 Feader",
+    url: "https://www.appinn.com/",
+    canonicalUrl: "https://www.appinn.com/",
+    summary: "内置测试模式使用 https://www.appinn.com/feed/ 作为默认数据源。",
+    contentText:
+      "这是 Feader 的内置测试模式数据。桌面端会继续通过 Tauri 命令访问本地 SQLite 与真实 RSS；浏览器预览则展示小众软件 feed 的固定测试源，避免没有 Tauri 后端时页面为空。",
+    author: "Feader",
+    publishedAt: "2026-05-23T08:00:00.000Z",
+    read: false,
+    saved: true,
+    createdAt: "2026-05-23T08:00:00.000Z",
+    updatedAt: "2026-05-23T08:00:00.000Z",
+  },
+  {
+    id: 2,
+    sourceId: 1,
+    sourceTitle: "小众软件",
+    externalId: "appinn-test-2",
+    title: "用 RSS 跟踪软件更新与工具推荐",
+    url: "https://www.appinn.com/feed/",
+    canonicalUrl: "https://www.appinn.com/feed/",
+    summary: "Feed 地址会显示在来源详情中，便于验证添加源、筛选、已读和收藏状态。",
+    contentText:
+      "测试数据保留真实 feed URL，交互状态在当前浏览器会话内更新。刷新按钮会模拟成功刷新，不会发起外部网络请求。",
+    author: "Feader",
+    publishedAt: "2026-05-22T09:15:00.000Z",
+    read: false,
+    saved: false,
+    createdAt: "2026-05-22T09:15:00.000Z",
+    updatedAt: "2026-05-22T09:15:00.000Z",
+  },
+  {
+    id: 3,
+    sourceId: 1,
+    sourceTitle: "小众软件",
+    externalId: "appinn-test-3",
+    title: "轻量阅读器需要清楚的来源健康状态",
+    url: "https://www.appinn.com/",
+    canonicalUrl: "https://www.appinn.com/",
+    summary: "来源、文章数量、未读数量和最近刷新时间都来自同一组内置测试数据。",
+    contentText:
+      "这条测试文章用于验证详情栏和阅读面板。测试模式与真实 Tauri 命令路径隔离，因此不会污染本地数据库。",
+    author: "Feader",
+    publishedAt: "2026-05-21T11:30:00.000Z",
+    read: true,
+    saved: false,
+    createdAt: "2026-05-21T11:30:00.000Z",
+    updatedAt: "2026-05-21T11:30:00.000Z",
+  },
+  {
+    id: 4,
+    sourceId: 1,
+    sourceTitle: "小众软件",
+    externalId: "appinn-test-4",
+    title: "在浏览器中预览 Feader 的三栏阅读工作台",
+    url: "https://www.appinn.com/",
+    canonicalUrl: "https://www.appinn.com/",
+    summary: "这条未读文章用于检查列表密度、选中态、按钮悬停态和阅读面板排版。",
+    contentText:
+      "测试模式的目标是让 Vite 预览能直接展示完整界面，同时保持桌面应用真实数据路径不变。",
+    author: "Feader",
+    publishedAt: "2026-05-20T13:45:00.000Z",
+    read: false,
+    saved: false,
+    createdAt: "2026-05-20T13:45:00.000Z",
+    updatedAt: "2026-05-20T13:45:00.000Z",
+  },
+  {
+    id: 5,
+    sourceId: 1,
+    sourceTitle: "小众软件",
+    externalId: "appinn-test-5",
+    title: "Appinn feed 作为默认验证入口",
+    url: builtInTestFeedUrl,
+    canonicalUrl: builtInTestFeedUrl,
+    summary: "默认源 URL 精确设置为 https://www.appinn.com/feed/。",
+    contentText:
+      "来源面板中的 URL 字段会显示该地址。添加源表单也默认以 RSS/Atom 流程为主，保持真实使用路径一致。",
+    author: "Feader",
+    publishedAt: "2026-05-19T15:00:00.000Z",
+    read: false,
+    saved: false,
+    createdAt: "2026-05-19T15:00:00.000Z",
+    updatedAt: "2026-05-19T15:00:00.000Z",
+  },
+];
+
+let testModeSourceState = testModeSources.map((source) => ({ ...source }));
+let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
+
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (isTauriRuntime()) {
+    return tauriInvoke<T>(command, args);
+  }
+  return testModeInvoke<T>(command, args);
+}
+
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+async function testModeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  switch (command) {
+    case "list_sources":
+      return syncTestModeSources() as T;
+    case "list_articles":
+      return filterTestModeArticles(args?.filter as ArticleFilter | null | undefined) as T;
+    case "refresh_source":
+      touchTestModeSource(Number(args?.sourceId));
+      return filterTestModeArticles({ sourceId: Number(args?.sourceId) }) as T;
+    case "refresh_all_sources":
+      testModeSourceState = testModeSourceState.map((source) => ({
+        ...source,
+        lastFetchedAt: new Date().toISOString(),
+        lastError: null,
+      }));
+      return testModeSourceState.map((source) => ({
+        sourceId: source.id,
+        ok: true,
+        articleCount: source.articleCount,
+        error: null,
+      })) as T;
+    case "mark_article_read":
+      setTestModeArticleState(Number(args?.articleId), { read: Boolean(args?.read) });
+      return undefined as T;
+    case "save_article":
+      setTestModeArticleState(Number(args?.articleId), { saved: Boolean(args?.saved) });
+      return undefined as T;
+    case "mark_articles_read": {
+      const sourceId = typeof args?.sourceId === "number" ? args.sourceId : undefined;
+      let changed = 0;
+      testModeArticleState = testModeArticleState.map((article) => {
+        if (sourceId && article.sourceId !== sourceId) {
+          return article;
+        }
+        if (article.read === Boolean(args?.read)) {
+          return article;
+        }
+        changed += 1;
+        return { ...article, read: Boolean(args?.read), updatedAt: new Date().toISOString() };
+      });
+      syncTestModeSources();
+      return changed as T;
+    }
+    case "add_source": {
+      const request = args?.request as { url?: string; title?: string } | undefined;
+      return upsertTestModeSource(request?.url, request?.title) as T;
+    }
+    case "update_source_title": {
+      const request = args?.request as { sourceId?: number; title?: string } | undefined;
+      const sourceId = Number(request?.sourceId);
+      testModeSourceState = testModeSourceState.map((source) =>
+        source.id === sourceId ? { ...source, title: request?.title || source.title } : source,
+      );
+      return testModeSourceState.find((source) => source.id === sourceId) as T;
+    }
+    case "delete_source": {
+      const sourceId = Number(args?.sourceId);
+      testModeSourceState = testModeSourceState.filter((source) => source.id !== sourceId);
+      testModeArticleState = testModeArticleState.filter((article) => article.sourceId !== sourceId);
+      return undefined as T;
+    }
+    case "preview_xpath_source":
+      return testModeArticleState.slice(0, 3).map(({ title, url, summary, publishedAt }) => ({
+        title,
+        url,
+        summary,
+        publishedAt,
+      })) as T;
+    case "add_xpath_source":
+      throw new Error("XPath test mode is read-only. Use the Tauri app to validate XPath sources.");
+    default:
+      throw new Error(`Test mode command '${command}' is not implemented.`);
+  }
+}
+
+function syncTestModeSources(): Source[] {
+  testModeSourceState = testModeSourceState.map((source) => {
+    const articles = testModeArticleState.filter((article) => article.sourceId === source.id);
+    return {
+      ...source,
+      articleCount: articles.length,
+      unreadCount: articles.filter((article) => !article.read).length,
+    };
+  });
+  return testModeSourceState.map((source) => ({ ...source }));
+}
+
+function filterTestModeArticles(filter?: ArticleFilter | null): Article[] {
+  return testModeArticleState
+    .filter((article) => !filter?.sourceId || article.sourceId === filter.sourceId)
+    .filter((article) => !filter?.unreadOnly || !article.read)
+    .filter((article) => !filter?.savedOnly || article.saved)
+    .map((article) => ({ ...article }));
+}
+
+function touchTestModeSource(sourceId: number): void {
+  testModeSourceState = testModeSourceState.map((source) =>
+    source.id === sourceId ? { ...source, lastFetchedAt: new Date().toISOString(), lastError: null } : source,
+  );
+}
+
+function setTestModeArticleState(articleId: number, patch: Partial<Article>): void {
+  testModeArticleState = testModeArticleState.map((article) =>
+    article.id === articleId ? { ...article, ...patch, updatedAt: new Date().toISOString() } : article,
+  );
+  syncTestModeSources();
+}
+
+function upsertTestModeSource(url = builtInTestFeedUrl, title = "小众软件"): Source {
+  const trimmedUrl = url.trim() || builtInTestFeedUrl;
+  const existing = testModeSourceState.find((source) => source.url === trimmedUrl);
+  if (existing) {
+    return existing;
+  }
+
+  const source: Source = {
+    id: Math.max(0, ...testModeSourceState.map((item) => item.id)) + 1,
+    kind: "rss",
+    title: title.trim() || trimmedUrl,
+    url: trimmedUrl,
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    lastFetchedAt: new Date().toISOString(),
+    lastError: null,
+    articleCount: 0,
+    unreadCount: 0,
+  };
+  testModeSourceState = [...testModeSourceState, source];
+  return source;
+}
 
 function App() {
   const [sources, setSources] = useState<Source[]>([]);
@@ -297,6 +551,15 @@ function App() {
     await loadData(selectedSourceId, filterMode, article.id);
   }
 
+  function handleArticleKeyDown(event: KeyboardEvent<HTMLElement>, articleId: number): void {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault();
+    setSelectedArticleId(articleId);
+  }
+
   async function runTask(label: string, task: () => Promise<void>): Promise<void> {
     setIsBusy(true);
     setStatus(label);
@@ -351,43 +614,52 @@ function App() {
           ))}
         </nav>
 
-        <button className="secondary-action full-width" disabled={isBusy} onClick={handleRefreshAll} type="button">
-          Refresh all sources
-        </button>
-
-        <nav className="feed-list" aria-label="Feeds">
-          <button
-            className={`feed-item ${selectedSourceId === undefined ? "active" : ""}`}
-            onClick={() => void handleSelectSource(undefined)}
-            type="button"
-          >
-            <span className="feed-main">
-              <span className="status-dot mixed" />
-              <span>
-                All feeds
-                <em>{articleCount} articles</em>
-              </span>
-            </span>
-            <small>{unreadCount}</small>
-          </button>
-          {sources.map((source) => (
+        {activeView === "reader" ? (
+          <>
             <button
-              className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
-              key={source.id}
-              onClick={() => void handleSelectSource(source.id)}
+              className="secondary-action full-width"
+              disabled={isBusy}
+              onClick={handleRefreshAll}
               type="button"
             >
-              <span className="feed-main">
-                <span className={`status-dot ${source.lastError ? "error" : "healthy"}`} />
-                <span>
-                  {source.title}
-                  <em>{source.kind} · {source.articleCount} articles</em>
-                </span>
-              </span>
-              <small>{source.unreadCount}</small>
+              Refresh all sources
             </button>
-          ))}
-        </nav>
+
+            <nav className="feed-list" aria-label="Feeds">
+              <button
+                className={`feed-item ${selectedSourceId === undefined ? "active" : ""}`}
+                onClick={() => void handleSelectSource(undefined)}
+                type="button"
+              >
+                <span className="feed-main">
+                  <span className="status-dot mixed" />
+                  <span>
+                    All feeds
+                    <em>{articleCount} articles</em>
+                  </span>
+                </span>
+                <small>{unreadCount}</small>
+              </button>
+              {sources.map((source) => (
+                <button
+                  className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
+                  key={source.id}
+                  onClick={() => void handleSelectSource(source.id)}
+                  type="button"
+                >
+                  <span className="feed-main">
+                    <span className={`status-dot ${source.lastError ? "error" : "healthy"}`} />
+                    <span>
+                      {source.title}
+                      <em>{source.kind} · {source.articleCount} articles</em>
+                    </span>
+                  </span>
+                  <small>{source.unreadCount}</small>
+                </button>
+              ))}
+            </nav>
+          </>
+        ) : null}
       </aside>
 
       {activeView === "reader" ? (
@@ -452,7 +724,10 @@ function App() {
                   selectedArticle?.id === article.id ? "selected" : ""
                 }`}
                 key={article.id}
+                onKeyDown={(event) => handleArticleKeyDown(event, article.id)}
                 onClick={() => setSelectedArticleId(article.id)}
+                role="button"
+                tabIndex={0}
               >
                 <div className="story-state">
                   <span className={article.read ? "read-dot" : "unread-dot"} />
@@ -585,11 +860,11 @@ function App() {
               <h1>Source manager</h1>
             </div>
             <button
-              className="primary-action icon-action"
+              className="primary-action add-source-action"
               onClick={() => setShowSourceComposer((value) => !value)}
               type="button"
             >
-              {showSourceComposer ? "Close" : "+"}
+              {showSourceComposer ? "Close source form" : "Add source"}
             </button>
           </header>
 
