@@ -1,0 +1,448 @@
+//! SQLite persistence for Feader sources and articles.
+
+use std::path::Path;
+use std::sync::Mutex;
+
+use chrono::Utc;
+use rusqlite::{params, Connection, ToSql};
+
+use crate::models::{Article, ArticleFilter, ParsedArticle, Source};
+
+/// Thread-safe application database handle.
+pub struct AppDatabase {
+    connection: Mutex<Connection>,
+}
+
+impl AppDatabase {
+    /// Open or create the SQLite database at the provided path.
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let connection = Connection::open(path).map_err(|error| error.to_string())?;
+        initialize_schema(&connection).map_err(|error| error.to_string())?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Open an in-memory database for tests.
+    #[cfg(test)]
+    pub fn in_memory() -> Result<Self, String> {
+        let connection = Connection::open_in_memory().map_err(|error| error.to_string())?;
+        initialize_schema(&connection).map_err(|error| error.to_string())?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
+    }
+
+    /// Return all known sources with article counters.
+    pub fn list_sources(&self) -> Result<Vec<Source>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        list_sources_with_connection(&connection)
+    }
+
+    /// Insert a source if it does not exist, or update its title when provided.
+    pub fn add_source(&self, url: &str, title: Option<&str>) -> Result<Source, String> {
+        let now = now_string();
+        let source_title = title
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(url);
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+
+        connection
+            .execute(
+                "
+                INSERT INTO sources (kind, title, url, created_at, updated_at)
+                VALUES ('rss', ?1, ?2, ?3, ?3)
+                ON CONFLICT(url) DO UPDATE SET
+                    title = CASE
+                        WHEN excluded.title = excluded.url THEN sources.title
+                        ELSE excluded.title
+                    END,
+                    updated_at = excluded.updated_at
+                ",
+                params![source_title, url, now],
+            )
+            .map_err(|error| error.to_string())?;
+
+        let source_id = connection
+            .query_row("SELECT id FROM sources WHERE url = ?1", [url], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?;
+
+        get_source_with_connection(&connection, source_id)
+    }
+
+    /// Find a source by id.
+    pub fn get_source(&self, source_id: i64) -> Result<Source, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        get_source_with_connection(&connection, source_id)
+    }
+
+    /// Merge parsed articles for a source and update fetch metadata.
+    pub fn upsert_articles(
+        &self,
+        source_id: i64,
+        source_title: Option<&str>,
+        articles: &[ParsedArticle],
+    ) -> Result<usize, String> {
+        let mut connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        let now = now_string();
+
+        if let Some(title) = source_title.filter(|value| !value.trim().is_empty()) {
+            transaction
+                .execute(
+                    "UPDATE sources SET title = ?1, last_fetched_at = ?2, updated_at = ?2 WHERE id = ?3",
+                    params![title, now, source_id],
+                )
+                .map_err(|error| error.to_string())?;
+        } else {
+            transaction
+                .execute(
+                    "UPDATE sources SET last_fetched_at = ?1, updated_at = ?1 WHERE id = ?2",
+                    params![now, source_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
+        for article in articles {
+            transaction
+                .execute(
+                    "
+                    INSERT INTO articles (
+                        source_id, external_id, title, url, canonical_url, summary,
+                        content_html, content_text, author, published_at, image_url,
+                        tags_json, created_at, updated_at
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+                    ON CONFLICT(source_id, url) DO UPDATE SET
+                        external_id = COALESCE(excluded.external_id, articles.external_id),
+                        title = excluded.title,
+                        canonical_url = excluded.canonical_url,
+                        summary = excluded.summary,
+                        content_html = excluded.content_html,
+                        content_text = excluded.content_text,
+                        author = excluded.author,
+                        published_at = excluded.published_at,
+                        image_url = excluded.image_url,
+                        tags_json = excluded.tags_json,
+                        updated_at = excluded.updated_at
+                    ",
+                    params![
+                        source_id,
+                        article.external_id,
+                        article.title,
+                        article.url,
+                        article.canonical_url,
+                        article.summary,
+                        article.content_html,
+                        article.content_text,
+                        article.author,
+                        article.published_at,
+                        article.image_url,
+                        article.tags_json,
+                        now
+                    ],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(articles.len())
+    }
+
+    /// Return articles matching an optional filter.
+    pub fn list_articles(&self, filter: ArticleFilter) -> Result<Vec<Article>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let mut sql = String::from(
+            "
+            SELECT
+                articles.id,
+                articles.source_id,
+                sources.title AS source_title,
+                articles.external_id,
+                articles.title,
+                articles.url,
+                articles.canonical_url,
+                articles.summary,
+                articles.content_html,
+                articles.content_text,
+                articles.author,
+                articles.published_at,
+                articles.image_url,
+                articles.tags_json,
+                article_states.read,
+                article_states.saved,
+                articles.created_at,
+                articles.updated_at
+            FROM articles
+            JOIN sources ON sources.id = articles.source_id
+            LEFT JOIN article_states ON article_states.article_id = articles.id
+            WHERE 1 = 1
+            ",
+        );
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        if let Some(source_id) = filter.source_id {
+            sql.push_str(" AND articles.source_id = ?");
+            params.push(Box::new(source_id));
+        }
+        if filter.unread_only.unwrap_or(false) {
+            sql.push_str(" AND COALESCE(article_states.read, 0) = 0");
+        }
+        if filter.saved_only.unwrap_or(false) {
+            sql.push_str(" AND COALESCE(article_states.saved, 0) = 1");
+        }
+
+        sql.push_str(
+            " ORDER BY COALESCE(articles.published_at, articles.created_at) DESC, articles.id DESC LIMIT 500",
+        );
+
+        let params_ref: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
+        let mut statement = connection
+            .prepare(&sql)
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map(params_ref.as_slice(), article_from_row)
+            .map_err(|error| error.to_string())?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Update the read state for one article.
+    pub fn mark_article_read(&self, article_id: i64, read: bool) -> Result<(), String> {
+        self.update_article_state(article_id, Some(read), None)
+    }
+
+    /// Update the saved state for one article.
+    pub fn save_article(&self, article_id: i64, saved: bool) -> Result<(), String> {
+        self.update_article_state(article_id, None, Some(saved))
+    }
+
+    fn update_article_state(
+        &self,
+        article_id: i64,
+        read: Option<bool>,
+        saved: Option<bool>,
+    ) -> Result<(), String> {
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "
+                INSERT INTO article_states (article_id, read, saved, updated_at)
+                VALUES (?1, 0, 0, ?2)
+                ON CONFLICT(article_id) DO NOTHING
+                ",
+                params![article_id, now],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "
+                UPDATE article_states
+                SET
+                    read = COALESCE(?2, read),
+                    saved = COALESCE(?3, saved),
+                    updated_at = ?4
+                WHERE article_id = ?1
+                ",
+                params![article_id, read, saved, now],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
+fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+
+        CREATE TABLE IF NOT EXISTS sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL DEFAULT 'rss',
+            title TEXT NOT NULL,
+            url TEXT NOT NULL UNIQUE,
+            config_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_fetched_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+            external_id TEXT,
+            title TEXT NOT NULL,
+            url TEXT NOT NULL,
+            canonical_url TEXT,
+            summary TEXT,
+            content_html TEXT,
+            content_text TEXT,
+            author TEXT,
+            published_at TEXT,
+            image_url TEXT,
+            tags_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_id, url)
+        );
+
+        CREATE TABLE IF NOT EXISTS article_states (
+            article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+            read INTEGER NOT NULL DEFAULT 0,
+            saved INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
+        CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
+        ",
+    )
+}
+
+fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+                sources.id,
+                sources.kind,
+                sources.title,
+                sources.url,
+                sources.config_json,
+                sources.created_at,
+                sources.last_fetched_at,
+                COUNT(articles.id) AS article_count,
+                SUM(CASE WHEN COALESCE(article_states.read, 0) = 0 AND articles.id IS NOT NULL THEN 1 ELSE 0 END) AS unread_count
+            FROM sources
+            LEFT JOIN articles ON articles.source_id = sources.id
+            LEFT JOIN article_states ON article_states.article_id = articles.id
+            GROUP BY sources.id
+            ORDER BY sources.created_at DESC
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Source {
+                id: row.get(0)?,
+                kind: row.get(1)?,
+                title: row.get(2)?,
+                url: row.get(3)?,
+                config_json: row.get(4)?,
+                created_at: row.get(5)?,
+                last_fetched_at: row.get(6)?,
+                article_count: row.get(7)?,
+                unread_count: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+            })
+        })
+        .map_err(|error| error.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn get_source_with_connection(connection: &Connection, source_id: i64) -> Result<Source, String> {
+    list_sources_with_connection(connection)?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| format!("Source {source_id} was not found"))
+}
+
+fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
+    Ok(Article {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        source_title: row.get(2)?,
+        external_id: row.get(3)?,
+        title: row.get(4)?,
+        url: row.get(5)?,
+        canonical_url: row.get(6)?,
+        summary: row.get(7)?,
+        content_html: row.get(8)?,
+        content_text: row.get(9)?,
+        author: row.get(10)?,
+        published_at: row.get(11)?,
+        image_url: row.get(12)?,
+        tags_json: row.get(13)?,
+        read: row.get::<_, Option<bool>>(14)?.unwrap_or(false),
+        saved: row.get::<_, Option<bool>>(15)?.unwrap_or(false),
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+    })
+}
+
+fn now_string() -> String {
+    Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_insert_is_idempotent_by_url() {
+        let database = AppDatabase::in_memory().expect("database opens");
+
+        let first = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let second = database
+            .add_source("https://example.com/feed.xml", None)
+            .expect("source upserts");
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(database.list_sources().expect("sources list").len(), 1);
+    }
+
+    #[test]
+    fn article_upsert_preserves_state() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let article = ParsedArticle {
+            external_id: Some("one".to_string()),
+            title: "First".to_string(),
+            url: "https://example.com/one".to_string(),
+            canonical_url: None,
+            summary: Some("Before".to_string()),
+            content_html: None,
+            content_text: None,
+            author: None,
+            published_at: None,
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article.clone()])
+            .expect("article inserts");
+        let inserted = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list")[0]
+            .clone();
+        database
+            .mark_article_read(inserted.id, true)
+            .expect("read state updates");
+
+        let mut changed = article;
+        changed.summary = Some("After".to_string());
+        database
+            .upsert_articles(source.id, None, &[changed])
+            .expect("article updates");
+        let updated = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list")[0]
+            .clone();
+
+        assert!(updated.read);
+        assert_eq!(updated.summary.as_deref(), Some("After"));
+    }
+}
