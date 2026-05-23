@@ -187,6 +187,7 @@ impl AppDatabase {
             .map_err(|error| error.to_string())?;
 
         for article in articles {
+            let content_html = article.content_html.as_deref().map(sanitize_html);
             transaction
                 .execute(
                     "
@@ -216,7 +217,7 @@ impl AppDatabase {
                         article.url,
                         article.canonical_url,
                         article.summary,
-                        article.content_html,
+                        content_html,
                         article.content_text,
                         article.author,
                         article.published_at,
@@ -563,6 +564,10 @@ fn now_string() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn sanitize_html(value: &str) -> String {
+    ammonia::clean(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +639,43 @@ mod tests {
 
         assert!(updated.read);
         assert_eq!(updated.summary.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn article_html_is_sanitized_on_upsert() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let article = ParsedArticle {
+            external_id: None,
+            title: "Dirty".to_string(),
+            url: "https://example.com/one".to_string(),
+            canonical_url: None,
+            summary: None,
+            content_html: Some(
+                "<p onclick=\"x()\">hi</p><script>alert(1)</script><img src=x onerror=alert(1)>"
+                    .to_string(),
+            ),
+            content_text: None,
+            author: None,
+            published_at: None,
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article])
+            .expect("article inserts");
+        let stored = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list")[0]
+            .clone();
+        let html = stored.content_html.unwrap_or_default().to_lowercase();
+
+        assert!(!html.contains("<script"));
+        assert!(!html.contains("onerror"));
+        assert!(!html.contains("onclick"));
     }
 
     #[test]
