@@ -88,6 +88,7 @@
 - Reference constraints: Folo uses a much larger modular route/layout system and MrRSS uses Vue/Tailwind; Feader should adapt only the design patterns that fit the current Tauri + React + plain CSS stack.
 - Performance constraints: preserve lightweight app shell; no animation or image dependency.
 - Compatibility constraints: theme preference stored in `localStorage`, system mode driven by `prefers-color-scheme`.
+- HTML safety: untrusted feed `content_html` is sanitized at the Rust ingest boundary with `ammonia` and again at render time with `DOMPurify` (defense-in-depth); the reader never renders raw feed HTML.
 - Test/screenshot expectations: run build checks; use browser verification when the in-app browser is available.
 
 ## Open questions
