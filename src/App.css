@@ -518,6 +518,39 @@ input:disabled {
   padding-right: 2px;
 }
 
+.feed-group {
+  display: grid;
+  gap: 2px;
+}
+
+.feed-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 8px;
+  color: var(--color-faint);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.feed-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot.muted {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-border-strong);
+}
+
 .feed-item {
   display: flex;
   align-items: center;
@@ -536,7 +569,7 @@ input:disabled {
 .feed-item:hover,
 .feed-item.active {
   border-color: var(--color-border);
-  background: var(--color-panel-strong);
+  background: var(--color-fill);
 }
 
 .feed-item.active {

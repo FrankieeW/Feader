@@ -100,6 +100,7 @@ const themeStorageKey = "feader.theme";
 const densityStorageKey = "feader.articleDensity";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
+const feedGroupStorageKey = "feader.feedGroups";
 const builtInTestFeedUrl = "https://www.appinn.com/feed/";
 const defaultPaneWidths: PaneWidths = {
   sidebar: 240,
@@ -376,6 +377,36 @@ function upsertTestModeSource(url = builtInTestFeedUrl, title = "小众软件"):
   return source;
 }
 
+const uncategorizedLabel = "Uncategorized";
+
+function groupSourcesByCategory(sources: Source[]): { category: string; sources: Source[] }[] {
+  const groups = new Map<string, Source[]>();
+  for (const source of sources) {
+    const key = source.category?.trim() ? source.category.trim() : uncategorizedLabel;
+    const bucket = groups.get(key) ?? [];
+    groups.set(key, [...bucket, source]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => {
+      if (a === uncategorizedLabel) return 1;
+      if (b === uncategorizedLabel) return -1;
+      return a.localeCompare(b);
+    })
+    .map(([category, sources]) => ({ category, sources }));
+}
+
+function readInitialCollapsedGroups(): Record<string, boolean> {
+  const stored = localStorage.getItem(feedGroupStorageKey);
+  if (!stored) {
+    return {};
+  }
+  try {
+    return JSON.parse(stored) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
 function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
@@ -410,7 +441,6 @@ function App() {
     [articles, selectedArticleId],
   );
   const unreadCount = sources.reduce((total, source) => total + source.unreadCount, 0);
-  const articleCount = sources.reduce((total, source) => total + source.articleCount, 0);
   const failedSourceCount = sources.filter((source) => source.lastError).length;
   const selectedSourceHealth = selectedSource ? sourceHealth(selectedSource) : "Mixed";
 
@@ -443,6 +473,16 @@ function App() {
   useEffect(() => {
     localStorage.setItem(paneStorageKey, JSON.stringify(paneWidths));
   }, [paneWidths]);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
+    readInitialCollapsedGroups(),
+  );
+
+  useEffect(() => {
+    localStorage.setItem(feedGroupStorageKey, JSON.stringify(collapsedGroups));
+  }, [collapsedGroups]);
+
+  const sourceGroups = useMemo(() => groupSourcesByCategory(sources), [sources]);
 
   async function loadData(
     sourceId = selectedSourceId,
@@ -757,30 +797,49 @@ function App() {
               >
                 <span className="feed-main">
                   <span className="status-dot mixed" />
-                  <span>
-                    All feeds
-                    <em>{articleCount} articles</em>
-                  </span>
+                  <span className="feed-name">All feeds</span>
                 </span>
                 <small>{unreadCount}</small>
               </button>
-              {sources.map((source) => (
-                <button
-                  className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
-                  key={source.id}
-                  onClick={() => void handleSelectSource(source.id)}
-                  type="button"
-                >
-                  <span className="feed-main">
-                    <span className={`status-dot ${source.lastError ? "error" : "healthy"}`} />
-                    <span>
-                      {source.title}
-                      <em>{source.kind} · {source.articleCount} articles</em>
-                    </span>
-                  </span>
-                  <small>{source.unreadCount}</small>
-                </button>
-              ))}
+              {sourceGroups.map((group) => {
+                const collapsed = collapsedGroups[group.category] ?? false;
+                return (
+                  <div className="feed-group" key={group.category}>
+                    <button
+                      aria-expanded={!collapsed}
+                      className="feed-group-header"
+                      onClick={() =>
+                        setCollapsedGroups((current) => ({
+                          ...current,
+                          [group.category]: !collapsed,
+                        }))
+                      }
+                      type="button"
+                    >
+                      <span>{group.category}</span>
+                      <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
+                    </button>
+                    {collapsed
+                      ? null
+                      : group.sources.map((source) => (
+                          <button
+                            className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
+                            key={source.id}
+                            onClick={() => void handleSelectSource(source.id)}
+                            type="button"
+                          >
+                            <span className="feed-main">
+                              <span
+                                className={`status-dot ${source.lastError ? "error" : source.unreadCount > 0 ? "healthy" : "muted"}`}
+                              />
+                              <span className="feed-name">{source.title}</span>
+                            </span>
+                            <small>{source.unreadCount}</small>
+                          </button>
+                        ))}
+                  </div>
+                );
+              })}
             </nav>
           </>
         ) : null}
