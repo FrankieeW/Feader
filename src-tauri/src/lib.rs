@@ -3,12 +3,15 @@
 mod db;
 mod feed_adapter;
 mod models;
+mod xpath_adapter;
 
 use std::fs;
 
 use db::AppDatabase;
 use models::{
-    AddSourceRequest, Article, ArticleFilter, Source, SourceRefreshResult, UpdateSourceTitleRequest,
+    AddSourceRequest, AddXPathSourceRequest, Article, ArticleFilter, ParsedArticle,
+    PreviewXPathSourceRequest, Source, SourceRefreshResult, UpdateSourceTitleRequest,
+    XPathSelectors,
 };
 use tauri::Manager;
 
@@ -42,6 +45,45 @@ async fn add_source(
     database.get_source(source.id)
 }
 
+/// Preview extracted articles for a declarative XPath source.
+#[tauri::command]
+async fn preview_xpath_source(
+    request: PreviewXPathSourceRequest,
+) -> Result<Vec<ParsedArticle>, String> {
+    let url = request.url.trim();
+    if url.is_empty() {
+        return Err("XPath source URL is required".to_string());
+    }
+
+    let feed = xpath_adapter::fetch_xpath_source(url, &request.selectors).await?;
+    Ok(feed.articles.into_iter().take(5).collect())
+}
+
+/// Add an XPath source after validating that selectors can extract articles.
+#[tauri::command]
+async fn add_xpath_source(
+    request: AddXPathSourceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    let url = request.url.trim();
+    let title = request.title.trim();
+    if url.is_empty() {
+        return Err("XPath source URL is required".to_string());
+    }
+    if title.is_empty() {
+        return Err("XPath source title is required".to_string());
+    }
+
+    let feed = xpath_adapter::fetch_xpath_source(url, &request.selectors).await?;
+    if feed.articles.is_empty() {
+        return Err("XPath selectors did not extract any articles".to_string());
+    }
+
+    let source = database.add_xpath_source(url, title, &request.selectors)?;
+    database.upsert_articles(source.id, Some(title), &feed.articles)?;
+    database.get_source(source.id)
+}
+
 /// Rename a source.
 #[tauri::command]
 fn update_source_title(
@@ -64,21 +106,7 @@ async fn refresh_source(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<Article>, String> {
     let source = database.get_source(source_id)?;
-    if source.kind != "rss" {
-        return Err(format!(
-            "Source kind '{}' is not refreshable yet",
-            source.kind
-        ));
-    }
-
-    let feed = match feed_adapter::fetch_feed(&source.url).await {
-        Ok(feed) => feed,
-        Err(error) => {
-            database.record_source_error(source.id, &error)?;
-            return Err(error);
-        }
-    };
-    database.upsert_articles(source.id, feed.title.as_deref(), &feed.articles)?;
+    refresh_source_record(&database, &source).await?;
     database.list_articles(ArticleFilter {
         source_id: Some(source.id),
         unread_only: None,
@@ -95,21 +123,8 @@ async fn refresh_all_sources(
     let mut results = Vec::with_capacity(sources.len());
 
     for source in sources.into_iter().filter(|source| source.enabled) {
-        if source.kind != "rss" {
-            let error = format!("Source kind '{}' is not refreshable yet", source.kind);
-            results.push(SourceRefreshResult {
-                source_id: source.id,
-                ok: false,
-                article_count: 0,
-                error: Some(error),
-            });
-            continue;
-        }
-
-        match feed_adapter::fetch_feed(&source.url).await {
-            Ok(feed) => {
-                let article_count = feed.articles.len();
-                database.upsert_articles(source.id, feed.title.as_deref(), &feed.articles)?;
+        match refresh_source_record(&database, &source).await {
+            Ok(article_count) => {
                 results.push(SourceRefreshResult {
                     source_id: source.id,
                     ok: true,
@@ -171,6 +186,40 @@ fn mark_articles_read(
     database.mark_articles_read(source_id, read)
 }
 
+async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Result<usize, String> {
+    let feed = match source.kind.as_str() {
+        "rss" => feed_adapter::fetch_feed(&source.url).await,
+        "xpath" => {
+            let selectors = parse_xpath_selectors(source)?;
+            xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
+        }
+        kind => Err(format!("Source kind '{kind}' is not refreshable yet")),
+    };
+
+    match feed {
+        Ok(feed) => {
+            let article_count = feed.articles.len();
+            let source_title = (source.kind == "rss")
+                .then_some(feed.title.as_deref())
+                .flatten();
+            database.upsert_articles(source.id, source_title, &feed.articles)?;
+            Ok(article_count)
+        }
+        Err(error) => {
+            database.record_source_error(source.id, &error)?;
+            Err(error)
+        }
+    }
+}
+
+fn parse_xpath_selectors(source: &Source) -> Result<XPathSelectors, String> {
+    let config = source
+        .config_json
+        .as_deref()
+        .ok_or_else(|| format!("XPath source '{}' has no selector config", source.title))?;
+    serde_json::from_str(config).map_err(|error| error.to_string())
+}
+
 /// Start the Feader Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -190,6 +239,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_sources,
             add_source,
+            preview_xpath_source,
+            add_xpath_source,
             update_source_title,
             delete_source,
             refresh_source,

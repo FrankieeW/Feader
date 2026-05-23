@@ -26,3 +26,6 @@ chrono = { version = "0.4", features = ["serde"] }
 feed-rs = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+sxd-document = "0.3"
+sxd-xpath = "0.4"
+url = "2"

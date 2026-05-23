@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use chrono::Utc;
 use rusqlite::{params, Connection, ToSql};
 
-use crate::models::{Article, ArticleFilter, ParsedArticle, Source};
+use crate::models::{Article, ArticleFilter, ParsedArticle, Source, XPathSelectors};
 
 /// Thread-safe application database handle.
 pub struct AppDatabase {
@@ -41,6 +41,27 @@ impl AppDatabase {
 
     /// Insert a source if it does not exist, or update its title when provided.
     pub fn add_source(&self, url: &str, title: Option<&str>) -> Result<Source, String> {
+        self.add_source_with_kind("rss", url, title, None)
+    }
+
+    /// Insert an XPath source and persist its selector configuration.
+    pub fn add_xpath_source(
+        &self,
+        url: &str,
+        title: &str,
+        selectors: &XPathSelectors,
+    ) -> Result<Source, String> {
+        let config_json = serde_json::to_string(selectors).map_err(|error| error.to_string())?;
+        self.add_source_with_kind("xpath", url, Some(title), Some(&config_json))
+    }
+
+    fn add_source_with_kind(
+        &self,
+        kind: &str,
+        url: &str,
+        title: Option<&str>,
+        config_json: Option<&str>,
+    ) -> Result<Source, String> {
         let now = now_string();
         let source_title = title
             .filter(|value| !value.trim().is_empty())
@@ -50,16 +71,20 @@ impl AppDatabase {
         connection
             .execute(
                 "
-                INSERT INTO sources (kind, title, url, created_at, updated_at)
-                VALUES ('rss', ?1, ?2, ?3, ?3)
+                INSERT INTO sources (kind, title, url, config_json, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?5)
                 ON CONFLICT(url) DO UPDATE SET
+                    kind = excluded.kind,
                     title = CASE
-                        WHEN excluded.title = excluded.url THEN sources.title
+                        WHEN excluded.title = excluded.url THEN COALESCE(sources.title, excluded.title)
                         ELSE excluded.title
                     END,
+                    config_json = excluded.config_json,
+                    enabled = 1,
+                    last_error = NULL,
                     updated_at = excluded.updated_at
                 ",
-                params![source_title, url, now],
+                params![kind, source_title, url, config_json, now],
             )
             .map_err(|error| error.to_string())?;
 

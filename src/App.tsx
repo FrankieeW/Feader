@@ -51,6 +51,38 @@ type SourceRefreshResult = {
 };
 
 type FilterMode = "all" | "unread" | "saved";
+type SourceInputMode = "rss" | "xpath";
+
+type XPathSelectors = {
+  items: string;
+  title: string;
+  url: string;
+  summary?: string;
+  publishedAt?: string;
+  author?: string;
+  content?: string;
+  image?: string;
+  nextPage?: string;
+};
+
+type ParsedArticle = {
+  title: string;
+  url: string;
+  summary?: string | null;
+  publishedAt?: string | null;
+};
+
+const defaultXPathSelectors: XPathSelectors = {
+  items: "//article",
+  title: ".//h2/a/text()",
+  url: ".//h2/a/@href",
+  summary: ".//p/text()",
+  publishedAt: ".//time/@datetime",
+  author: "",
+  content: ".",
+  image: ".//img/@src",
+  nextPage: "",
+};
 
 function App() {
   const [sources, setSources] = useState<Source[]>([]);
@@ -58,7 +90,11 @@ function App() {
   const [selectedSourceId, setSelectedSourceId] = useState<number | undefined>();
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
   const [feedUrl, setFeedUrl] = useState("");
+  const [xpathTitle, setXPathTitle] = useState("");
+  const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
+  const [xpathPreview, setXPathPreview] = useState<ParsedArticle[]>([]);
   const [editingTitle, setEditingTitle] = useState("");
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
@@ -102,14 +138,42 @@ function App() {
     }
 
     await runTask("Adding feed", async () => {
-      const source = await invoke<Source>("add_source", {
-        request: { url },
-      });
+      const source =
+        sourceInputMode === "rss"
+          ? await invoke<Source>("add_source", { request: { url } })
+          : await invoke<Source>("add_xpath_source", {
+              request: {
+                url,
+                title: xpathTitle,
+                selectors: compactXPathSelectors(xpathSelectors),
+              },
+            });
       setFeedUrl("");
+      setXPathTitle("");
+      setXPathPreview([]);
       setSelectedSourceId(source.id);
       setFilterMode("all");
       await loadData(source.id, "all", undefined);
       setStatus(`Added ${source.title}`);
+    });
+  }
+
+  async function handlePreviewXPath(): Promise<void> {
+    const url = feedUrl.trim();
+    if (!url) {
+      setStatus("Enter a page URL first.");
+      return;
+    }
+
+    await runTask("Previewing XPath", async () => {
+      const preview = await invoke<ParsedArticle[]>("preview_xpath_source", {
+        request: {
+          url,
+          selectors: compactXPathSelectors(xpathSelectors),
+        },
+      });
+      setXPathPreview(preview);
+      setStatus(`Preview extracted ${preview.length} articles`);
     });
   }
 
@@ -233,15 +297,43 @@ function App() {
         </div>
 
         <form className="feed-form" onSubmit={handleAddFeed}>
+          <div className="source-mode" role="tablist" aria-label="Source type">
+            {(["rss", "xpath"] as const).map((mode) => (
+              <button
+                className={sourceInputMode === mode ? "active" : ""}
+                key={mode}
+                onClick={() => setSourceInputMode(mode)}
+                role="tab"
+                type="button"
+              >
+                {mode === "rss" ? "RSS/Atom" : "XPath"}
+              </button>
+            ))}
+          </div>
           <input
-            aria-label="Feed URL"
+            aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
             disabled={isBusy}
             onChange={(event) => setFeedUrl(event.currentTarget.value)}
-            placeholder="https://example.com/feed.xml"
+            placeholder={
+              sourceInputMode === "rss"
+                ? "https://example.com/feed.xml"
+                : "https://example.com/articles"
+            }
             value={feedUrl}
           />
+          {sourceInputMode === "xpath" ? (
+            <XPathSourceForm
+              isBusy={isBusy}
+              onPreview={() => void handlePreviewXPath()}
+              onSelectorsChange={setXPathSelectors}
+              onTitleChange={setXPathTitle}
+              preview={xpathPreview}
+              selectors={xpathSelectors}
+              title={xpathTitle}
+            />
+          ) : null}
           <button disabled={isBusy} type="submit">
-            Add
+            {sourceInputMode === "rss" ? "Add" : "Confirm"}
           </button>
         </form>
 
@@ -265,7 +357,10 @@ function App() {
               onClick={() => void handleSelectSource(source.id)}
               type="button"
             >
-              <span>{source.title}</span>
+              <span>
+                {source.title}
+                <em>{source.kind}</em>
+              </span>
               <small>{source.unreadCount}</small>
             </button>
           ))}
@@ -450,6 +545,133 @@ function buildArticleFilter(sourceId: number | undefined, mode: FilterMode): Art
     filter.savedOnly = true;
   }
   return Object.keys(filter).length === 0 ? null : filter;
+}
+
+function XPathSourceForm({
+  isBusy,
+  onPreview,
+  onSelectorsChange,
+  onTitleChange,
+  preview,
+  selectors,
+  title,
+}: {
+  isBusy: boolean;
+  onPreview: () => void;
+  onSelectorsChange: (selectors: XPathSelectors) => void;
+  onTitleChange: (title: string) => void;
+  preview: ParsedArticle[];
+  selectors: XPathSelectors;
+  title: string;
+}) {
+  return (
+    <section className="xpath-form">
+      <input
+        aria-label="XPath source title"
+        disabled={isBusy}
+        onChange={(event) => onTitleChange(event.currentTarget.value)}
+        placeholder="Source title"
+        value={title}
+      />
+      <SelectorInput
+        disabled={isBusy}
+        label="Items"
+        name="items"
+        onChange={onSelectorsChange}
+        selectors={selectors}
+      />
+      <SelectorInput
+        disabled={isBusy}
+        label="Title"
+        name="title"
+        onChange={onSelectorsChange}
+        selectors={selectors}
+      />
+      <SelectorInput
+        disabled={isBusy}
+        label="URL"
+        name="url"
+        onChange={onSelectorsChange}
+        selectors={selectors}
+      />
+      <SelectorInput
+        disabled={isBusy}
+        label="Summary"
+        name="summary"
+        onChange={onSelectorsChange}
+        selectors={selectors}
+      />
+      <SelectorInput
+        disabled={isBusy}
+        label="Date"
+        name="publishedAt"
+        onChange={onSelectorsChange}
+        selectors={selectors}
+      />
+      <button disabled={isBusy} onClick={onPreview} type="button">
+        Preview
+      </button>
+      {preview.length > 0 ? (
+        <div className="xpath-preview">
+          {preview.map((article) => (
+            <article key={article.url}>
+              <strong>{article.title}</strong>
+              <span>{article.url}</span>
+            </article>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function SelectorInput({
+  disabled,
+  label,
+  name,
+  onChange,
+  selectors,
+}: {
+  disabled: boolean;
+  label: string;
+  name: keyof XPathSelectors;
+  onChange: (selectors: XPathSelectors) => void;
+  selectors: XPathSelectors;
+}) {
+  return (
+    <label className="selector-input">
+      <span>{label}</span>
+      <input
+        disabled={disabled}
+        onChange={(event) =>
+          onChange({
+            ...selectors,
+            [name]: event.currentTarget.value,
+          })
+        }
+        value={selectors[name] ?? ""}
+      />
+    </label>
+  );
+}
+
+function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
+  return {
+    items: selectors.items.trim(),
+    title: selectors.title.trim(),
+    url: selectors.url.trim(),
+    summary: emptyToUndefined(selectors.summary),
+    publishedAt: emptyToUndefined(selectors.publishedAt),
+    author: emptyToUndefined(selectors.author),
+    content: emptyToUndefined(selectors.content),
+    image: emptyToUndefined(selectors.image),
+    nextPage: emptyToUndefined(selectors.nextPage),
+  };
+}
+
+function emptyToUndefined(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function resolveSelectedArticleId(

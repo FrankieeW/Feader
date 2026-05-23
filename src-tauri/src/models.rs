@@ -43,12 +43,44 @@ pub struct Article {
     pub updated_at: String,
 }
 
-/// Request body for adding a feed source.
+/// Request body for adding an RSS or Atom source.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddSourceRequest {
     pub url: String,
     pub title: Option<String>,
+}
+
+/// XPath selectors for a static HTML/XML source.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathSelectors {
+    pub items: String,
+    pub title: String,
+    pub url: String,
+    pub summary: Option<String>,
+    pub published_at: Option<String>,
+    pub author: Option<String>,
+    pub content: Option<String>,
+    pub image: Option<String>,
+    pub next_page: Option<String>,
+}
+
+/// Request body for previewing an XPath source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewXPathSourceRequest {
+    pub url: String,
+    pub selectors: XPathSelectors,
+}
+
+/// Request body for adding an XPath source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddXPathSourceRequest {
+    pub url: String,
+    pub title: String,
+    pub selectors: XPathSelectors,
 }
 
 /// Request body for renaming a source.
@@ -79,7 +111,8 @@ pub struct ArticleFilter {
 }
 
 /// An article parsed from an upstream adapter before database persistence.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ParsedArticle {
     pub external_id: Option<String>,
     pub title: String,
