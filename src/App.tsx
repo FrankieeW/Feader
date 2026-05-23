@@ -58,6 +58,7 @@ type ThemeMode = "light" | "dark" | "system";
 type ViewMode = "reader" | "sources" | "settings";
 type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
+type ReaderView = "none" | "preview" | "immersive";
 type PaneKey = "sidebar" | "timeline";
 
 type PaneWidths = {
@@ -413,6 +414,7 @@ function App() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<number | undefined>();
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
+  const [readerView, setReaderView] = useState<ReaderView>("none");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
   const [activeView, setActiveView] = useState<ViewMode>("reader");
@@ -483,6 +485,12 @@ function App() {
   useEffect(() => {
     localStorage.setItem(paneStorageKey, JSON.stringify(paneWidths));
   }, [paneWidths]);
+
+  useEffect(() => {
+    if (!selectedArticle) {
+      setReaderView("none");
+    }
+  }, [selectedArticle]);
 
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
     readInitialCollapsedGroups(),
@@ -708,6 +716,14 @@ function App() {
       return;
     }
 
+    if (event.key === "Escape") {
+      if (readerView !== "none") {
+        event.preventDefault();
+        setReaderView("none");
+      }
+      return;
+    }
+
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       selectRelativeArticle(event.key === "ArrowDown" ? 1 : -1);
@@ -715,6 +731,12 @@ function App() {
     }
 
     if (!selectedArticle || event.metaKey || event.ctrlKey || event.altKey) {
+      return;
+    }
+
+    if (event.key === " ") {
+      event.preventDefault();
+      setReaderView((current) => (current === "preview" ? "none" : "preview"));
       return;
     }
 
@@ -1316,6 +1338,37 @@ function App() {
             </article>
           </section>
         </section>
+      ) : null}
+
+      {readerView === "preview" && selectedArticle ? (
+        <div
+          className="ql-backdrop"
+          onClick={() => setReaderView("none")}
+          role="presentation"
+        >
+          <div
+            aria-label={selectedArticle.title}
+            aria-modal="true"
+            className="ql-panel"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <button
+              aria-label="Close preview"
+              className="ql-close"
+              onClick={() => setReaderView("none")}
+              type="button"
+            >
+              x
+            </button>
+            <ReaderArticle
+              article={selectedArticle}
+              onToggleRead={(item) => void handleToggleRead(item)}
+              onToggleSaved={(item) => void handleToggleSaved(item)}
+              readerTypography={readerTypography}
+            />
+          </div>
+        </div>
       ) : null}
     </main>
   );
