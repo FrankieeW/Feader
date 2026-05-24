@@ -114,6 +114,28 @@ pub struct AiSettingsInput {
     pub api_key: Option<String>,
 }
 
+/// Plugin credential metadata returned to the renderer (cookie never echoed).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginCredential {
+    pub plugin_id: String,
+    pub cookie_set: bool,
+    pub cookie_reference: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_checked_at: Option<String>,
+    pub last_check_ok: Option<bool>,
+    pub last_check_message: Option<String>,
+}
+
+/// Result of probing a plugin credential's validity.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialCheck {
+    pub ok: bool,
+    pub message: String,
+    pub checked_at: String,
+}
+
 /// Return the variable name if `value` is an env reference like `$NAME` or `${NAME}`.
 pub fn env_reference_name(value: &str) -> Option<String> {
     let rest = value.trim().strip_prefix('$')?;
@@ -162,6 +184,8 @@ pub struct XPathSelectors {
     pub max_items: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<XPathSourcePluginInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader: Option<ReaderConfig>,
 }
 
 /// A regex replacement applied to extracted article body HTML.
@@ -171,6 +195,36 @@ pub struct ContentCleanupRule {
     pub pattern: String,
     #[serde(default)]
     pub replacement: String,
+}
+
+/// Plugin-authored customization of the article reading view.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_selectors: Vec<String>,
+    #[serde(default)]
+    pub resolve_relative_urls: bool,
+    #[serde(default)]
+    pub rewrite_links: bool,
+    #[serde(default)]
+    pub show_custom_fields: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<ReaderLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub css: Option<String>,
+}
+
+/// Recommended reader presentation defaults from a plugin.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderLayout {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typography: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub immersive: Option<bool>,
 }
 
 /// A non-standard metadata field extracted from either a list item or detail page.
@@ -238,6 +292,8 @@ pub struct XPathRulePack {
     pub authors: Vec<PluginAuthor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<PluginParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<PluginAuth>,
 }
 
 /// Public author metadata displayed in the plugin Hub.
@@ -255,6 +311,14 @@ pub struct PluginAuthor {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_id: Option<String>,
+}
+
+/// Login probe declared by a plugin for credential validity checks.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginAuth {
+    pub check_url: String,
+    pub logged_in_xpath: String,
 }
 
 /// Optional parameter block for source creation dialogs.
@@ -337,6 +401,8 @@ pub struct RemoteXPathRulePack {
     pub candidates: Vec<XPathRuleCandidate>,
     #[serde(default)]
     pub parameters: Option<PluginParameters>,
+    #[serde(default)]
+    pub auth: Option<PluginAuth>,
 }
 
 /// One page-family rule contributed by a static XPath plugin pack.

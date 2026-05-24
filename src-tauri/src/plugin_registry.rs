@@ -144,6 +144,7 @@ pub async fn fetch_remote_plugin_pack(
         candidates: pack.candidates,
         authors: manifest.authors,
         parameters: pack.parameters,
+        auth: pack.auth,
     })
 }
 
@@ -282,6 +283,7 @@ fn rule_pack(
         candidates,
         authors: Vec::new(),
         parameters: None,
+        auth: None,
     }
 }
 
@@ -331,6 +333,7 @@ fn discuz_rule_pack() -> XPathRulePack {
                 custom_fields: Vec::new(),
                 max_items: Some(20),
                 plugin: None,
+                reader: None,
             },
         )],
     )
@@ -365,6 +368,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     custom_fields: Vec::new(),
                     max_items: None,
                     plugin: None,
+                    reader: None,
                 },
             ),
             candidate(
@@ -389,6 +393,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     custom_fields: Vec::new(),
                     max_items: None,
                     plugin: None,
+                    reader: None,
                 },
             ),
         ],
@@ -423,6 +428,7 @@ fn generic_rule_pack() -> XPathRulePack {
                 custom_fields: Vec::new(),
                 max_items: None,
                 plugin: None,
+                reader: None,
             },
         )],
     )
