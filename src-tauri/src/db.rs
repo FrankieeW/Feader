@@ -7,7 +7,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 use crate::models::{
-    AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, Source,
+    AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential, Source,
     WalletLoginChallenge, WalletSession, XPathSelectors,
 };
 
@@ -328,6 +328,104 @@ impl AppDatabase {
             .map_err(|error| error.to_string())?;
 
         read_ai_settings(&connection)
+    }
+
+    /// Read a plugin credential with the cookie literal masked (env reference surfaced).
+    pub fn get_plugin_credential(&self, plugin_id: &str) -> Result<PluginCredential, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let row = connection
+            .query_row(
+                "SELECT cookie, updated_at, last_checked_at, last_check_ok, last_check_message
+                 FROM plugin_credentials WHERE plugin_id = ?1",
+                params![plugin_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+
+        let Some((cookie, updated_at, last_checked_at, last_check_ok, last_check_message)) = row
+        else {
+            return Ok(PluginCredential {
+                plugin_id: plugin_id.to_string(),
+                cookie_set: false,
+                cookie_reference: None,
+                updated_at: None,
+                last_checked_at: None,
+                last_check_ok: None,
+                last_check_message: None,
+            });
+        };
+        let trimmed = cookie.trim();
+        Ok(PluginCredential {
+            plugin_id: plugin_id.to_string(),
+            cookie_set: !trimmed.is_empty(),
+            cookie_reference: crate::models::is_env_reference(trimmed)
+                .then(|| trimmed.to_string()),
+            updated_at,
+            last_checked_at,
+            last_check_ok: last_check_ok.map(|value| value != 0),
+            last_check_message,
+        })
+    }
+
+    /// Raw stored cookie string (literal or `$NAME`) for backend fetch use only.
+    pub fn raw_plugin_cookie(&self, plugin_id: &str) -> Result<Option<String>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let cookie = connection
+            .query_row(
+                "SELECT cookie FROM plugin_credentials WHERE plugin_id = ?1",
+                params![plugin_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Ok(cookie)
+    }
+
+    /// Upsert a plugin cookie; a blank cookie clears it.
+    pub fn set_plugin_credential(&self, plugin_id: &str, cookie: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO plugin_credentials (plugin_id, cookie, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(plugin_id) DO UPDATE SET cookie = excluded.cookie, updated_at = excluded.updated_at",
+                params![plugin_id, cookie.trim(), now_string()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Record the outcome of a credential validity probe.
+    pub fn record_plugin_credential_check(
+        &self,
+        plugin_id: &str,
+        ok: bool,
+        message: &str,
+    ) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO plugin_credentials (plugin_id, cookie, updated_at, last_checked_at, last_check_ok, last_check_message)
+                 VALUES (?1, '', ?2, ?2, ?3, ?4)
+                 ON CONFLICT(plugin_id) DO UPDATE SET
+                    last_checked_at = excluded.last_checked_at,
+                    last_check_ok = excluded.last_check_ok,
+                    last_check_message = excluded.last_check_message",
+                params![plugin_id, now_string(), if ok { 1 } else { 0 }, message],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     fn add_source_with_kind(
@@ -775,6 +873,15 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             fetched_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS plugin_credentials (
+            plugin_id          TEXT PRIMARY KEY,
+            cookie             TEXT NOT NULL DEFAULT '',
+            updated_at         TEXT NOT NULL,
+            last_checked_at    TEXT,
+            last_check_ok      INTEGER,
+            last_check_message TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
         CREATE INDEX IF NOT EXISTS idx_wallet_login_challenges_expires_at
@@ -1022,6 +1129,37 @@ mod tests {
     }
 
     #[test]
+    fn plugin_credential_round_trip_and_masking() {
+        let db = AppDatabase::in_memory().expect("open db");
+        // unset → cookie_set false
+        let empty = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        assert!(!empty.cookie_set);
+
+        db.set_plugin_credential("official.naixi-forum.xpath", "sid=abc; uid=1").unwrap();
+        let saved = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        assert!(saved.cookie_set);
+        assert_eq!(saved.cookie_reference, None); // literal not echoed
+        assert_eq!(db.raw_plugin_cookie("official.naixi-forum.xpath").unwrap().as_deref(), Some("sid=abc; uid=1"));
+
+        // env reference is surfaced (not masked away)
+        db.set_plugin_credential("p2", "$FEADER_NAIXI_COOKIE").unwrap();
+        let envref = db.get_plugin_credential("p2").unwrap();
+        assert!(envref.cookie_set);
+        assert_eq!(envref.cookie_reference.as_deref(), Some("$FEADER_NAIXI_COOKIE"));
+
+        // blank clears
+        db.set_plugin_credential("p2", "").unwrap();
+        assert!(!db.get_plugin_credential("p2").unwrap().cookie_set);
+
+        // check recording
+        db.record_plugin_credential_check("official.naixi-forum.xpath", true, "已登录").unwrap();
+        let checked = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        assert_eq!(checked.last_check_ok, Some(true));
+        assert_eq!(checked.last_check_message.as_deref(), Some("已登录"));
+        assert!(checked.last_checked_at.is_some());
+    }
+
+    #[test]
     fn article_upsert_preserves_state() {
         let database = AppDatabase::in_memory().expect("database opens");
         let source = database
@@ -1085,6 +1223,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
         let source = database
             .add_xpath_source("https://example.com/list", "Example", &selectors)

@@ -1298,6 +1298,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         }
     }
 
@@ -1624,6 +1625,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let broken = preview_xpath_document("https://example.com/list", &document, &draft)
@@ -1674,6 +1676,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let selected =
@@ -1764,6 +1767,7 @@ mod tests {
             ],
             max_items: Some(20),
             plugin: None,
+            reader: None,
         };
 
         let preview = preview_xpath_document(
@@ -1882,6 +1886,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let selected = select_best_xpath_selectors_for_preview(
