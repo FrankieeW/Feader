@@ -9,6 +9,8 @@ use crate::models::{
     ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathSelectors,
 };
 
+const MAX_XPATH_PAGES: usize = 5;
+
 fn normalize_html(raw: &str) -> String {
     use html5ever::tendril::TendrilSink;
 
@@ -38,19 +40,30 @@ pub async fn fetch_xpath_source(
     url: &str,
     selectors: &XPathSelectors,
 ) -> Result<ParsedFeed, String> {
-    let response = reqwest::Client::new()
-        .get(url)
-        .header("user-agent", "Feader/0.1")
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("XPath source request failed with status {status}"));
+    let mut visited = std::collections::HashSet::new();
+    let mut current = url.to_string();
+    let mut articles = Vec::new();
+
+    for _ in 0..MAX_XPATH_PAGES {
+        if !visited.insert(current.clone()) {
+            break;
+        }
+
+        let body = fetch_page(&current).await?;
+        let normalized = normalize_html(&body);
+        let feed = parse_xpath_source(&current, &normalized, selectors)?;
+        articles.extend(feed.articles);
+
+        match next_page_url(&current, &normalized, selectors)? {
+            Some(next) if !visited.contains(&next) => current = next,
+            _ => break,
+        }
     }
 
-    let body = response.text().await.map_err(|error| error.to_string())?;
-    parse_xpath_source(url, &normalize_html(&body), selectors)
+    Ok(ParsedFeed {
+        title: None,
+        articles,
+    })
 }
 
 /// Fetch a static page and return extracted article samples plus selector diagnostics.
@@ -58,6 +71,11 @@ pub async fn preview_xpath_source(
     url: &str,
     selectors: &XPathSelectors,
 ) -> Result<XPathPreview, String> {
+    let body = fetch_page(url).await?;
+    preview_xpath_document(url, &normalize_html(&body), selectors)
+}
+
+async fn fetch_page(url: &str) -> Result<String, String> {
     let response = reqwest::Client::new()
         .get(url)
         .header("user-agent", "Feader/0.1")
@@ -69,8 +87,7 @@ pub async fn preview_xpath_source(
         return Err(format!("XPath source request failed with status {status}"));
     }
 
-    let body = response.text().await.map_err(|error| error.to_string())?;
-    preview_xpath_document(url, &normalize_html(&body), selectors)
+    response.text().await.map_err(|error| error.to_string())
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -283,6 +300,22 @@ pub fn preview_xpath_document(
         diagnostics,
         next_page_url,
     })
+}
+
+fn next_page_url(
+    base_url: &str,
+    document: &str,
+    selectors: &XPathSelectors,
+) -> Result<Option<String>, String> {
+    let package = parser::parse(document).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let document = package.as_document();
+    let raw = preview_optional_string(
+        Node::Root(document.root()),
+        selectors.next_page.as_deref(),
+    );
+    raw.map(|value| absolutize_url(base_url, &value)).transpose()
 }
 
 fn validate_selectors(selectors: &XPathSelectors) -> Result<(), String> {
@@ -642,6 +675,21 @@ mod tests {
         let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
         assert!(html.contains("<strong>"), "expected inner tags, got: {html}");
         assert!(html.contains("Bold"));
+    }
+
+    #[test]
+    fn resolves_absolute_next_page_url() {
+        let mut selectors = selectors();
+        selectors.next_page = Some("//a[@rel='next']/@href".to_string());
+
+        let next = next_page_url(
+            "https://example.com/blog/",
+            r#"<html><body><a rel="next" href="/page/2">Next</a></body></html>"#,
+            &selectors,
+        )
+        .expect("next page resolves");
+
+        assert_eq!(next.as_deref(), Some("https://example.com/page/2"));
     }
 
     #[test]
