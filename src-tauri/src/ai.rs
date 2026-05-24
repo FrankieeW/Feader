@@ -1,11 +1,14 @@
 //! AI provider client for selector suggestions.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use crate::models::{env_reference_name, AiSettings, XPathSelectors};
 use crate::xpath_adapter::is_valid_xpath;
 
 const AI_HTML_CHAR_CAP: usize = 12_000;
+const AI_REQUEST_TIMEOUT_SECONDS: u64 = 45;
 
 /// Resolve a stored API key: `$NAME`/`${NAME}` from the environment, otherwise literal.
 pub fn resolve_api_key(stored: &str) -> Result<String, String> {
@@ -115,7 +118,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         "max_tokens": 1024,
         "messages": [{ "role": "user", "content": prompt }],
     });
-    let response = reqwest::Client::new()
+    let response = ai_http_client()?
         .post(endpoint)
         .header("x-api-key", key)
         .header("anthropic-version", "2023-06-01")
@@ -140,7 +143,7 @@ async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<S
         "model": &settings.model,
         "messages": [{ "role": "user", "content": prompt }],
     });
-    let response = reqwest::Client::new()
+    let response = ai_http_client()?
         .post(endpoint)
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json")
@@ -156,6 +159,13 @@ async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<S
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| "Unexpected OpenAI response shape".to_string())
+}
+
+fn ai_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

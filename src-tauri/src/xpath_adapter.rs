@@ -1,5 +1,7 @@
 //! Declarative XPath source adapter for static HTML/XML pages.
 
+use std::time::Duration;
+
 use sxd_document::dom::{ChildOfElement, Element};
 use sxd_document::parser;
 use sxd_xpath::{nodeset::Node, Context, Factory, Value};
@@ -10,6 +12,7 @@ use crate::models::{
 };
 
 const MAX_XPATH_PAGES: usize = 5;
+const XPATH_FETCH_TIMEOUT_SECONDS: u64 = 20;
 
 fn normalize_html(raw: &str) -> String {
     use html5ever::tendril::TendrilSink;
@@ -104,7 +107,10 @@ pub fn is_valid_xpath(expression: &str) -> bool {
 }
 
 async fn fetch_page(url: &str) -> Result<String, String> {
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(XPATH_FETCH_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| error.to_string())?
         .get(url)
         .header("user-agent", "Feader/0.1")
         .send()
