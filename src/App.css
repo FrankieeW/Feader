@@ -483,10 +483,68 @@ input:disabled {
 }
 
 .selector-input span,
-.feed-item em {
+.feed-item em,
+.xpath-diagnostic span {
   font-size: 11px;
   font-style: normal;
   text-transform: uppercase;
+}
+
+.xpath-advanced {
+  display: grid;
+  gap: 8px;
+}
+
+.xpath-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.xpath-advanced[open] {
+  padding-top: 2px;
+}
+
+.xpath-diagnostics {
+  display: grid;
+  gap: 6px;
+}
+
+.xpath-diagnostic {
+  display: grid;
+  grid-template-columns: minmax(74px, 0.7fr) auto minmax(0, 1.6fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: var(--color-panel-strong);
+}
+
+.xpath-diagnostic strong {
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  text-transform: uppercase;
+  background: var(--color-panel-soft);
+}
+
+.xpath-diagnostic em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.xpath-diagnostic[data-status="ok"] strong {
+  color: var(--color-success);
+}
+
+.xpath-diagnostic[data-status="invalid"] strong,
+.xpath-diagnostic[data-status="missing"] strong,
+.xpath-diagnostic[data-status="empty"] strong {
+  color: var(--color-danger);
 }
 
 .xpath-preview {
@@ -507,6 +565,14 @@ input:disabled {
 .xpath-preview span {
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+
+.xpath-preview p,
+.xpath-preview em {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-style: normal;
 }
 
 .feed-list {

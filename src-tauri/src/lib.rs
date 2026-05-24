@@ -9,9 +9,8 @@ use std::fs;
 
 use db::AppDatabase;
 use models::{
-    AddSourceRequest, AddXPathSourceRequest, Article, ArticleFilter, ParsedArticle,
-    PreviewXPathSourceRequest, Source, SourceRefreshResult, UpdateSourceTitleRequest,
-    XPathSelectors,
+    AddSourceRequest, AddXPathSourceRequest, Article, ArticleFilter, PreviewXPathSourceRequest,
+    Source, SourceRefreshResult, UpdateSourceTitleRequest, XPathPreview, XPathSelectors,
 };
 use tauri::Manager;
 
@@ -47,16 +46,13 @@ async fn add_source(
 
 /// Preview extracted articles for a declarative XPath source.
 #[tauri::command]
-async fn preview_xpath_source(
-    request: PreviewXPathSourceRequest,
-) -> Result<Vec<ParsedArticle>, String> {
+async fn preview_xpath_source(request: PreviewXPathSourceRequest) -> Result<XPathPreview, String> {
     let url = request.url.trim();
     if url.is_empty() {
         return Err("XPath source URL is required".to_string());
     }
 
-    let feed = xpath_adapter::fetch_xpath_source(url, &request.selectors).await?;
-    Ok(feed.articles.into_iter().take(5).collect())
+    xpath_adapter::preview_xpath_source(url, &request.selectors).await
 }
 
 /// Add an XPath source after validating that selectors can extract articles.

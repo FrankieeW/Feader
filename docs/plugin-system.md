@@ -44,7 +44,7 @@ The user or AI defines XPath expressions for fields such as:
 
 The rule should be stored as data, not code. This makes it inspectable, exportable, syncable, and safer than arbitrary scripts.
 
-Implementation status: static, well-formed HTML/XML pages can be previewed, saved, refreshed, and normalized into Feader articles. JavaScript-rendered pages, authentication, pagination traversal, and AI-assisted selector generation remain follow-up work.
+Implementation status: static, well-formed HTML/XML pages can be previewed, saved, refreshed, and normalized into Feader articles. Preview includes field-level diagnostics for required and optional selectors, extracted article samples, and next-page URL preview. JavaScript-rendered pages, authentication, full pagination traversal, draft rule storage, and AI-assisted selector generation remain follow-up work.
 
 Example shape:
 

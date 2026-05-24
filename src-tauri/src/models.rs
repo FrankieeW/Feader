@@ -67,6 +67,28 @@ pub struct XPathSelectors {
     pub next_page: Option<String>,
 }
 
+/// Preview diagnostics for a single XPath selector field.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathFieldDiagnostic {
+    pub field: String,
+    pub label: String,
+    pub required: bool,
+    pub expression: Option<String>,
+    pub status: String,
+    pub message: String,
+    pub sample: Option<String>,
+}
+
+/// Preview result for a declarative XPath source.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathPreview {
+    pub articles: Vec<ParsedArticle>,
+    pub diagnostics: Vec<XPathFieldDiagnostic>,
+    pub next_page_url: Option<String>,
+}
+
 /// Request body for previewing an XPath source.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

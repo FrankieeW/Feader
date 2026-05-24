@@ -4,6 +4,15 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import DOMPurify from "dompurify";
 import "./App.css";
 
+type ReaderShortcutEvent = {
+  altKey: boolean;
+  ctrlKey: boolean;
+  key: string;
+  metaKey: boolean;
+  target: EventTarget | null;
+  preventDefault: () => void;
+};
+
 type Source = {
   id: number;
   kind: string;
@@ -84,6 +93,25 @@ type ParsedArticle = {
   url: string;
   summary?: string | null;
   publishedAt?: string | null;
+  author?: string | null;
+  contentText?: string | null;
+  imageUrl?: string | null;
+};
+
+type XPathFieldDiagnostic = {
+  field: string;
+  label: string;
+  required: boolean;
+  expression?: string | null;
+  status: string;
+  message: string;
+  sample?: string | null;
+};
+
+type XPathPreview = {
+  articles: ParsedArticle[];
+  diagnostics: XPathFieldDiagnostic[];
+  nextPageUrl?: string | null;
 };
 
 const defaultXPathSelectors: XPathSelectors = {
@@ -301,12 +329,49 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       return undefined as T;
     }
     case "preview_xpath_source":
-      return testModeArticleState.slice(0, 3).map(({ title, url, summary, publishedAt }) => ({
-        title,
-        url,
-        summary,
-        publishedAt,
-      })) as T;
+      return {
+        articles: testModeArticleState
+          .slice(0, 3)
+          .map(({ title, url, summary, publishedAt, author, contentText, imageUrl }) => ({
+            title,
+            url,
+            summary,
+            publishedAt,
+            author,
+            contentText,
+            imageUrl,
+          })),
+        diagnostics: [
+          {
+            field: "items",
+            label: "Items",
+            required: true,
+            expression: "//article",
+            status: "ok",
+            message: "Item nodes matched.",
+            sample: "3",
+          },
+          {
+            field: "title",
+            label: "Title",
+            required: true,
+            expression: ".//h2/a/text()",
+            status: "ok",
+            message: "Values found in preview items.",
+            sample: testModeArticleState[0]?.title,
+          },
+          {
+            field: "url",
+            label: "URL",
+            required: true,
+            expression: ".//h2/a/@href",
+            status: "ok",
+            message: "Values found in preview items.",
+            sample: testModeArticleState[0]?.url,
+          },
+        ],
+        nextPageUrl: null,
+      } as T;
     case "add_xpath_source":
       throw new Error("XPath test mode is read-only. Use the Tauri app to validate XPath sources.");
     case "set_source_category": {
@@ -429,7 +494,7 @@ function App() {
   const [feedUrl, setFeedUrl] = useState("");
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
-  const [xpathPreview, setXPathPreview] = useState<ParsedArticle[]>([]);
+  const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
 
@@ -538,7 +603,7 @@ function App() {
             });
       setFeedUrl("");
       setXPathTitle("");
-      setXPathPreview([]);
+      setXPathPreview(null);
       setShowSourceComposer(false);
       setSelectedSourceId(source.id);
       setFilterMode("all");
@@ -555,14 +620,14 @@ function App() {
     }
 
     await runTask("Previewing XPath", async () => {
-      const preview = await invoke<ParsedArticle[]>("preview_xpath_source", {
+      const preview = await invoke<XPathPreview>("preview_xpath_source", {
         request: {
           url,
           selectors: compactXPathSelectors(xpathSelectors),
         },
       });
       setXPathPreview(preview);
-      setStatus(`Preview extracted ${preview.length} articles`);
+      setStatus(`Preview extracted ${preview.articles.length} articles`);
     });
   }
 
@@ -673,7 +738,7 @@ function App() {
     setSelectedArticleId(articleId);
   }
 
-  function handleAppKeyDown(event: KeyboardEvent<HTMLElement>): void {
+  function handleAppKeyDown(event: ReaderShortcutEvent): void {
     if (activeView !== "reader" || isTextInputTarget(event.target)) {
       return;
     }
@@ -712,6 +777,19 @@ function App() {
       void handleToggleSaved(selectedArticle);
     }
   }
+
+  useEffect(() => {
+    function handleDocumentKeyDown(event: globalThis.KeyboardEvent): void {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      handleAppKeyDown(event);
+    }
+
+    document.addEventListener("keydown", handleDocumentKeyDown);
+    return () => document.removeEventListener("keydown", handleDocumentKeyDown);
+  });
 
   function selectRelativeArticle(offset: number): void {
     if (articles.length === 0) {
@@ -776,7 +854,6 @@ function App() {
     <main
       className="app-shell"
       data-view={activeView}
-      onKeyDown={handleAppKeyDown}
       style={shellStyle}
     >
       <IconRail
@@ -1760,10 +1837,11 @@ function XPathSourceForm({
   onPreview: () => void;
   onSelectorsChange: (selectors: XPathSelectors) => void;
   onTitleChange: (title: string) => void;
-  preview: ParsedArticle[];
+  preview: XPathPreview | null;
   selectors: XPathSelectors;
   title: string;
 }) {
+  const previewArticles = preview?.articles ?? [];
   return (
     <section className="xpath-form">
       <input
@@ -1808,15 +1886,70 @@ function XPathSourceForm({
         onChange={onSelectorsChange}
         selectors={selectors}
       />
+      <details className="xpath-advanced">
+        <summary>Advanced fields</summary>
+        <SelectorInput
+          disabled={isBusy}
+          label="Author"
+          name="author"
+          onChange={onSelectorsChange}
+          selectors={selectors}
+        />
+        <SelectorInput
+          disabled={isBusy}
+          label="Content"
+          name="content"
+          onChange={onSelectorsChange}
+          selectors={selectors}
+        />
+        <SelectorInput
+          disabled={isBusy}
+          label="Image"
+          name="image"
+          onChange={onSelectorsChange}
+          selectors={selectors}
+        />
+        <SelectorInput
+          disabled={isBusy}
+          label="Next page"
+          name="nextPage"
+          onChange={onSelectorsChange}
+          selectors={selectors}
+        />
+      </details>
       <button disabled={isBusy} onClick={onPreview} type="button">
         Preview
       </button>
-      {preview.length > 0 ? (
+      {preview ? (
+        <div className="xpath-diagnostics" aria-label="XPath selector diagnostics">
+          {preview.diagnostics.map((diagnostic) => (
+            <div
+              className="xpath-diagnostic"
+              data-status={diagnostic.status}
+              key={diagnostic.field}
+            >
+              <span>{diagnostic.label}</span>
+              <strong>{diagnostic.status}</strong>
+              <em>{diagnostic.sample || diagnostic.message}</em>
+            </div>
+          ))}
+          {preview.nextPageUrl ? (
+            <div className="xpath-diagnostic" data-status="ok">
+              <span>Next page</span>
+              <strong>ok</strong>
+              <em>{preview.nextPageUrl}</em>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {previewArticles.length > 0 ? (
         <div className="xpath-preview">
-          {preview.map((article) => (
+          {previewArticles.map((article) => (
             <article key={article.url}>
               <strong>{article.title}</strong>
               <span>{article.url}</span>
+              {article.summary ? <p>{article.summary}</p> : null}
+              {article.author ? <em>{article.author}</em> : null}
             </article>
           ))}
         </div>

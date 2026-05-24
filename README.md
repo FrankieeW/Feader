@@ -49,6 +49,7 @@ Core goals:
 - A shared article output contract so RSS, XPath rules, and scripts all feed the same reading pipeline
 
 See [docs/plugin-system.md](docs/plugin-system.md) for the initial architecture.
+See [docs/evm-wallet-login-plan.md](docs/evm-wallet-login-plan.md) for the EVM wallet login plan and [docs/ai-mcp-cli-plan.md](docs/ai-mcp-cli-plan.md) for the AI, MCP, and CLI control plan.
 
 ## Status
 
