@@ -57,4 +57,20 @@ See [docs/evm-wallet-login-plan.md](docs/evm-wallet-login-plan.md) for the EVM w
 
 ## Status
 
-This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation includes local-first RSS/Atom source management, XPath source preview diagnostics, EVM wallet login through local SIWE verification, refresh status tracking, normalized articles, read/saved state, and a reader workspace backed by SQLite.
+This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation includes local-first RSS/Atom source management, XPath source preview diagnostics, EVM wallet login through local SIWE verification, refresh status tracking, normalized articles, read/saved state, a built-in JSON CLI for source/article automation, and a reader workspace backed by SQLite.
+
+## CLI
+
+The installed `feader` executable launches the desktop app when run without arguments. With arguments, it acts as a JSON-first control plane over the same SQLite database and feed adapters:
+
+```bash
+feader sources list --json
+feader source add https://example.com/feed.xml --title Example --category News --json
+feader source refresh --all --json
+feader source rename 1 "New title" --json
+feader source category 1 "Research" --json
+feader source delete 1 --yes --json
+feader articles list --unread --limit 20 --json
+```
+
+Use `--db /path/to/feader.sqlite` or `FEADER_DB=/path/to/feader.sqlite` to target a specific database. Without either, the CLI uses the app data database path for the current platform.

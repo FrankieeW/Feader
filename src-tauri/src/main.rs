@@ -2,5 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args_os().len() > 1 {
+        std::process::exit(feader_lib::cli::run_from_env());
+    }
+
     feader_lib::run()
 }

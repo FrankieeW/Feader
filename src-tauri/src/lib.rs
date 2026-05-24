@@ -1,5 +1,6 @@
 //! Feader Tauri command surface and application bootstrap.
 
+pub mod cli;
 mod db;
 mod feed_adapter;
 mod models;
