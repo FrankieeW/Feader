@@ -977,11 +977,13 @@ function App() {
     setAiSettings(settings);
   }
 
-  async function loadXPathPluginPacks(): Promise<void> {
+  async function loadXPathPluginPacks(forceRefresh = false): Promise<void> {
     try {
-      const packs = await invoke<XPathRulePack[]>("fetch_registry_packs");
+      const packs = await invoke<XPathRulePack[]>("fetch_registry_packs", {
+        forceRefresh,
+      });
       setXPathRulePacks(packs);
-      setHubRegistryStatus("Remote registry loaded.");
+      setHubRegistryStatus(forceRefresh ? "Remote registry refreshed." : "Remote registry loaded.");
     } catch (error) {
       const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
       setXPathRulePacks(packs);
@@ -1881,7 +1883,7 @@ function App() {
             </div>
             <button
               className="secondary-action"
-              onClick={() => void loadXPathPluginPacks()}
+              onClick={() => void loadXPathPluginPacks(true)}
               title="Refresh plugin registry"
             >
               Refresh

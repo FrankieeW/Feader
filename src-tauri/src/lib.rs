@@ -115,24 +115,27 @@ const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 /// with bundled packs. Results are cached locally with a 24-hour TTL.
 #[tauri::command]
 async fn fetch_registry_packs(
+    force_refresh: Option<bool>,
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<XPathRulePack>, String> {
-    load_registry_packs(&database).await
+    load_registry_packs(&database, force_refresh.unwrap_or(false)).await
 }
 
-async fn load_registry_packs(database: &AppDatabase) -> Result<Vec<XPathRulePack>, String> {
-    let registry_json = match database.get_cache("registry_index", REGISTRY_CACHE_TTL_SECONDS)? {
-        Some(cached) => cached,
-        None => {
-            let index = plugin_registry::fetch_registry_index().await?;
-            let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
-            database.set_cache("registry_index", &json)?;
-            json
+async fn load_registry_packs(
+    database: &AppDatabase,
+    force_refresh: bool,
+) -> Result<Vec<XPathRulePack>, String> {
+    let index = if force_refresh {
+        fetch_and_cache_registry_index(database).await?
+    } else {
+        match database.get_cache("registry_index", REGISTRY_CACHE_TTL_SECONDS)? {
+            Some(cached) => match serde_json::from_str::<RegistryIndex>(&cached) {
+                Ok(index) if registry_cache_is_usable(&index) => index,
+                _ => fetch_and_cache_registry_index(database).await?,
+            },
+            None => fetch_and_cache_registry_index(database).await?,
         }
     };
-
-    let index: RegistryIndex =
-        serde_json::from_str(&registry_json).map_err(|error| error.to_string())?;
 
     let mut all_packs = plugin_registry::bundled_xpath_rule_packs();
     let bundled_ids: std::collections::HashSet<String> =
@@ -149,9 +152,13 @@ async fn load_registry_packs(database: &AppDatabase) -> Result<Vec<XPathRulePack
             entry.version,
             entry.sha256.as_deref().unwrap_or("nosha")
         );
-        let pack_json = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
-            Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
-            None => None,
+        let pack_json = if force_refresh {
+            None
+        } else {
+            match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
+                Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
+                None => None,
+            }
         };
 
         if let Some(pack) = pack_json {
@@ -172,6 +179,22 @@ async fn load_registry_packs(database: &AppDatabase) -> Result<Vec<XPathRulePack
     }
 
     Ok(all_packs)
+}
+
+async fn fetch_and_cache_registry_index(database: &AppDatabase) -> Result<RegistryIndex, String> {
+    let index = plugin_registry::fetch_registry_index().await?;
+    let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
+    database.set_cache("registry_index", &json)?;
+    Ok(index)
+}
+
+fn registry_cache_is_usable(index: &RegistryIndex) -> bool {
+    index.schema_version == "feader-registry/v1"
+        && index.plugins.iter().all(|entry| {
+            entry.sha256.as_deref().map(str::trim).is_some_and(|value| {
+                value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+            })
+        })
 }
 
 /// Suggest XPath selectors for a page using the configured AI provider.
@@ -197,7 +220,7 @@ async fn suggest_xpath_source(
                 .to_string(),
         );
     }
-    let rule_packs = load_registry_packs(&database)
+    let rule_packs = load_registry_packs(&database, false)
         .await
         .unwrap_or_else(|_| plugin_registry::bundled_xpath_rule_packs());
     let mut suggestion =
