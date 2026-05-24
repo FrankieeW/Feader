@@ -1338,6 +1338,73 @@ mod tests {
     }
 
     #[test]
+    fn previews_naixi_current_forum_markup() {
+        let document = normalize_html_document(
+            r#"
+            <html><body>
+              <ul id="threadlisttableid">
+                <li id="normalthread_11940" class="kmlist new">
+                  <a href="space-uid-13650.html" class="kmimg">
+                    <img src="https://uc.naixi.net/uc_server/avatar.php?uid=13650&amp;size=middle" />
+                  </a>
+                  <a href="thread-11940-1-1.html" class="kmtit">
+                    <span class="km_subject">本来只想做个小工具</span>
+                  </a>
+                  <div class="kmfoot">
+                    <span class="kmpl">21</span><span class="kmck">948</span>
+                    <a href="space-uid-13650.html">gaoyici</a>
+                    <span class="kmtime">发表于 2026-5-15</span>
+                    <a href="forum-64-1.html" class="kmbg kmico_bk">日常</a>
+                  </div>
+                </li>
+                <li id="normalthread_12009" class="kmlist new">
+                  <a href="thread-12009-1-1.html" class="kmtit">
+                    <span class="km_subject">如何绕过 tg 注册短信费</span>
+                  </a>
+                  <div class="kmfoot">
+                    <a href="space-uid-18051.html">用户003</a>
+                    <span class="kmtime">发表于 <span title="2026-5-18">7 天前</span></span>
+                  </div>
+                </li>
+              </ul>
+              <a href="forum-64-2.html" class="nxt">下一页</a>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes");
+        let selectors = XPathSelectors {
+            items: "//*[@id='threadlisttableid']/li[contains(@class, 'kmlist')]".to_string(),
+            title: ".//*[contains(@class, 'km_subject')]".to_string(),
+            url: ".//a[contains(@class, 'kmtit')]/@href".to_string(),
+            summary: Some(".//*[contains(@class, 'kmfoot')]".to_string()),
+            published_at: Some(".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]".to_string()),
+            author: Some(".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
+            content: None,
+            image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
+            next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
+        };
+
+        let preview = preview_xpath_document(
+            "https://forum.naixi.net/forum-64-1.html",
+            &document,
+            &selectors,
+        )
+        .expect("previews naixi selectors");
+
+        assert_eq!(preview.articles.len(), 2);
+        assert_eq!(preview.articles[0].title, "本来只想做个小工具");
+        assert_eq!(
+            preview.articles[0].url,
+            "https://forum.naixi.net/thread-11940-1-1.html"
+        );
+        assert_eq!(preview.articles[0].author.as_deref(), Some("gaoyici"));
+        assert_eq!(
+            preview.next_page_url.as_deref(),
+            Some("https://forum.naixi.net/forum-64-2.html")
+        );
+    }
+
+    #[test]
     fn selects_maccms_detail_candidate_for_single_detail_page() {
         let document = normalize_html_document(
             r#"

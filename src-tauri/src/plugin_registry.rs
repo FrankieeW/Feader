@@ -139,10 +139,7 @@ pub async fn fetch_remote_plugin_pack(
             .description
             .or(manifest.description)
             .unwrap_or_default(),
-        capabilities: vec![
-            "xpath.selectorCandidates".to_string(),
-            "ai.promptRules".to_string(),
-        ],
+        capabilities: vec!["xpath.selectorCandidates".to_string()],
         candidates: pack.candidates,
         parameters: pack.parameters,
     })
@@ -313,17 +310,17 @@ fn discuz_rule_pack() -> XPathRulePack {
             "forum-thread-list",
             90,
             &["threadlisttableid", "km_subject", "discuz"],
-            "- Discuz/forum thread list: prefer items `//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]`, title `.//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]`, url `.//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href`, author from the first `space-uid` link inside `.kminfo`, date from `.kmtime/*[@title]/@title`, next page from `.nxt/@href`.",
+            "- Discuz/forum thread list: prefer items `//*[@id='threadlisttableid']/li[contains(@class, 'kmlist')]`, title `.//*[contains(@class, 'km_subject')]`, url `.//a[contains(@class, 'kmtit')]/@href`, author from the first `space-uid` link inside `.kminfo`, date from `.kmtime/*[@title]/@title`, next page from `.nxt/@href`.",
             XPathSelectors {
-                items: "//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]".to_string(),
-                title: ".//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]".to_string(),
-                url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href".to_string(),
-                summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]".to_string()),
-                published_at: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' kmtime ')]/*[@title][1]/@title".to_string()),
-                author: Some(".//div[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
+                items: "//*[@id='threadlisttableid']/li[contains(@class, 'kmlist')]".to_string(),
+                title: ".//*[contains(@class, 'km_subject')]".to_string(),
+                url: ".//a[contains(@class, 'kmtit')]/@href".to_string(),
+                summary: Some(".//*[contains(@class, 'kminfo')]".to_string()),
+                published_at: Some(".//*[contains(@class, 'kmtime')]/*[@title][1]/@title".to_string()),
+                author: Some(".//div[contains(@class, 'kminfo')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
                 content: None,
-                image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmimg ')]//img/@src".to_string()),
-                next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' nxt ')]/@href".to_string()),
+                image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
+                next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
             },
         )],
     )

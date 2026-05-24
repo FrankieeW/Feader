@@ -106,13 +106,13 @@ fn set_ai_settings(
 /// Return bundled static XPath plugin packs.
 #[tauri::command]
 fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
-    plugin_registry::bundled_xpath_rule_packs()
+    Vec::new()
 }
 
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 
-/// Fetch the plugin registry from the remote FeaderHub repository and merge
-/// with bundled packs. Results are cached locally with a 24-hour TTL.
+/// Fetch the plugin registry from the remote FeaderHub repository.
+/// Results are cached locally with a 24-hour TTL.
 #[tauri::command]
 async fn fetch_registry_packs(
     force_refresh: Option<bool>,
@@ -137,12 +137,11 @@ async fn load_registry_packs(
         }
     };
 
-    let mut all_packs = plugin_registry::bundled_xpath_rule_packs();
-    let bundled_ids: std::collections::HashSet<String> =
-        all_packs.iter().map(|pack| pack.id.clone()).collect();
+    let mut all_packs = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
 
     for entry in index.plugins {
-        if bundled_ids.contains(&entry.id) {
+        if !seen_ids.insert(entry.id.clone()) {
             continue;
         }
 
@@ -220,9 +219,7 @@ async fn suggest_xpath_source(
                 .to_string(),
         );
     }
-    let rule_packs = load_registry_packs(&database, false)
-        .await
-        .unwrap_or_else(|_| plugin_registry::bundled_xpath_rule_packs());
+    let rule_packs = plugin_registry::bundled_xpath_rule_packs();
     let mut suggestion =
         ai::suggest_xpath_selectors(&settings, &raw_key, &html, &rule_packs).await?;
     suggestion.selectors = xpath_adapter::select_best_xpath_selectors_for_preview_with_packs(

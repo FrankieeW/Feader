@@ -263,6 +263,7 @@ pub struct XPathRuleCandidate {
     pub page_type: String,
     pub priority: usize,
     pub detect: Vec<String>,
+    #[serde(default)]
     pub prompt_rule: String,
     pub selectors: XPathSelectors,
 }

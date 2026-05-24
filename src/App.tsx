@@ -103,7 +103,7 @@ type XPathRuleCandidate = {
   pageType: string;
   priority: number;
   detect: string[];
-  promptRule: string;
+  promptRule?: string;
   selectors: XPathSelectors;
 };
 
@@ -383,90 +383,31 @@ let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
 let testModeAiSettings: AiSettings = { ...defaultAiSettings };
 const testModeXPathRulePacks: XPathRulePack[] = [
   {
-    id: "official.discuz.xpath",
-    name: "Discuz XPath Rules",
-    version: "0.1.0",
-    apiVersion: "xpath-rule-pack/v1",
-    registry: "https://github.com/FrankieeW/FeaderHub",
-    trust: "bundled-official",
-    description: "Static XPath and AI prompt rules for Discuz-style forum thread lists.",
-    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
-    candidates: [
-      {
-        id: "discuz-thread-list",
-        pageType: "forum-thread-list",
-        priority: 90,
-        detect: ["threadlisttableid", "km_subject", "discuz"],
-        promptRule: "Discuz/forum thread list",
-        selectors: defaultXPathSelectors,
-      },
-    ],
-  },
-  {
-    id: "official.maccms.xpath",
-    name: "MacCMS XPath Rules",
-    version: "0.1.0",
-    apiVersion: "xpath-rule-pack/v1",
-    registry: "https://github.com/FrankieeW/FeaderHub",
-    trust: "bundled-official",
-    description: "Static XPath and AI prompt rules for MacCMS video list and detail pages.",
-    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
-    candidates: [
-      {
-        id: "maccms-video-list",
-        pageType: "video-list",
-        priority: 80,
-        detect: ["vodlist_item", "maccms", "vod/detail"],
-        promptRule: "MacCMS/video listing",
-        selectors: defaultXPathSelectors,
-      },
-      {
-        id: "maccms-video-detail",
-        pageType: "video-detail",
-        priority: 85,
-        detect: ["detail_list_box", "btn_primary", "vodlist_thumb"],
-        promptRule: "MacCMS/video detail page",
-        selectors: defaultXPathSelectors,
-      },
-    ],
-  },
-  {
-    id: "official.generic-html.xpath",
-    name: "Generic HTML XPath Rules",
-    version: "0.1.0",
-    apiVersion: "xpath-rule-pack/v1",
-    registry: "https://github.com/FrankieeW/FeaderHub",
-    trust: "bundled-official",
-    description: "Fallback static XPath and AI prompt rules for generic article listings.",
-    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
-    candidates: [
-      {
-        id: "generic-article-list",
-        pageType: "article-list",
-        priority: 10,
-        detect: [],
-        promptRule: "Generic listing",
-        selectors: defaultXPathSelectors,
-      },
-    ],
-  },
-  {
     id: "official.naixi-forum.xpath",
     name: "Naixi Forum XPath Rules",
     version: "0.1.0",
     apiVersion: "xpath-rule-pack/v1",
     registry: "https://github.com/FrankieeW/FeaderHub",
     trust: "official",
-    description: "XPath and AI prompt rules for naixi.net Discuz forum thread lists with section-based browsing.",
-    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
+    description: "Static XPath rules for naixi.net forum thread lists with section-based browsing.",
+    capabilities: ["xpath.selectorCandidates"],
     candidates: [
       {
         id: "naixi-forum-thread-list",
         pageType: "forum-thread-list",
         priority: 90,
-        detect: ["threadlisttableid", "normalthread_", "forum.naixi.net"],
-        promptRule: "Naixi/Discuz forum thread list",
-        selectors: defaultXPathSelectors,
+        detect: ["threadlisttableid", "kmlist", "km_subject"],
+        selectors: {
+          items: "//*[@id='threadlisttableid']/li[contains(@class, 'kmlist')]",
+          title: ".//*[contains(@class, 'km_subject')]",
+          url: ".//a[contains(@class, 'kmtit')]/@href",
+          summary: ".//*[contains(@class, 'kmfoot')]",
+          publishedAt: ".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]",
+          author: ".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]",
+          content: "",
+          image: ".//a[contains(@class, 'kmimg')]//img/@src",
+          nextPage: "//a[contains(@class, 'nxt')]/@href",
+        },
       },
     ],
     parameters: {
@@ -479,7 +420,6 @@ const testModeXPathRulePacks: XPathRulePack[] = [
         { id: "forum-65-2", path: ["板块", "内容区", "技术", "编程"], url: "https://forum.naixi.net/forum-65-2.html" },
         { id: "forum-62-1", path: ["板块", "站务区", "公告"], url: "https://forum.naixi.net/forum-62-1.html" },
       ],
-      defaults: { maxItems: 20, maxPages: 3 },
     },
   },
 ];
@@ -998,7 +938,7 @@ function App() {
 
     setDialogUrl(firstSection?.url ?? "");
     setDialogSectionId(firstSection?.id ?? "");
-    setDialogTitle(pack.name);
+    setDialogTitle(pluginSourceTitle(pack, firstSection));
     setDialogCandidateId(firstCandidate?.id ?? "");
     setDialogPreview(null);
     setDialogStatus(null);
@@ -2063,6 +2003,7 @@ function App() {
                       if (sec) {
                         setDialogSectionId(sec.id);
                         setDialogUrl(sec.url);
+                        setDialogTitle(pluginSourceTitle(showPluginDialog, sec));
                       }
                     }}
                     value={dialogSectionId}
@@ -2701,6 +2642,17 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
       ))}
     </dl>
   );
+}
+
+function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string {
+  const sectionName = section?.path[section.path.length - 1]?.trim();
+  if (!sectionName) {
+    return pack.name;
+  }
+  if (pack.id === "official.naixi-forum.xpath") {
+    return `奶昔论坛 · ${sectionName}`;
+  }
+  return `${pack.name} · ${sectionName}`;
 }
 
 function CategoryPicker({
