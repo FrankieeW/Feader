@@ -18,6 +18,7 @@ pub struct Source {
     pub last_error: Option<String>,
     pub article_count: i64,
     pub unread_count: i64,
+    pub refresh_interval_seconds: Option<i64>,
 }
 
 /// A normalized article emitted by RSS, XPath, or script adapters.
@@ -548,4 +549,35 @@ pub struct ParsedArticle {
 pub struct ParsedFeed {
     pub title: Option<String>,
     pub articles: Vec<ParsedArticle>,
+}
+
+/// Auto-refresh configuration returned to the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoRefreshConfig {
+    pub enabled: bool,
+    pub global_interval_seconds: i64,
+    pub plugin_overrides: Vec<PluginRefreshOverride>,
+    pub next_refresh_at: Option<String>,
+}
+
+/// Per-plugin refresh interval override.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRefreshOverride {
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub refresh_interval_seconds: i64,
+}
+
+/// Emitted to the frontend on each scheduler tick.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshTickEvent {
+    pub refreshing: bool,
+    pub current_source_id: Option<i64>,
+    pub current_source_title: Option<String>,
+    pub next_refresh_at: Option<String>,
+    pub sources_checked: usize,
+    pub sources_refreshed: usize,
 }

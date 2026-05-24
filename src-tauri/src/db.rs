@@ -7,8 +7,8 @@ use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 use crate::models::{
-    AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential, Source,
-    WalletLoginChallenge, WalletSession, XPathSelectors,
+    AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
+    PluginRefreshOverride, Source, WalletLoginChallenge, WalletSession, XPathSelectors,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -894,6 +894,16 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             last_check_message TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS plugin_auto_refresh (
+            plugin_id                TEXT PRIMARY KEY,
+            refresh_interval_seconds INTEGER NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
         CREATE INDEX IF NOT EXISTS idx_wallet_login_challenges_expires_at
@@ -918,6 +928,23 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
         "category",
         "ALTER TABLE sources ADD COLUMN category TEXT",
     )?;
+    add_column_if_missing(
+        connection,
+        "sources",
+        "refresh_interval_seconds",
+        "ALTER TABLE sources ADD COLUMN refresh_interval_seconds INTEGER",
+    )?;
+
+    // Seed defaults for auto-refresh settings.
+    connection.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('auto_refresh_enabled', 'true')",
+        [],
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('global_refresh_interval', '1800')",
+        [],
+    )?;
+
     Ok(())
 }
 
@@ -956,7 +983,8 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 sources.last_error,
                 COUNT(articles.id) AS article_count,
                 SUM(CASE WHEN COALESCE(article_states.read, 0) = 0 AND articles.id IS NOT NULL THEN 1 ELSE 0 END) AS unread_count,
-                sources.category
+                sources.category,
+                sources.refresh_interval_seconds
             FROM sources
             LEFT JOIN articles ON articles.source_id = sources.id
             LEFT JOIN article_states ON article_states.article_id = articles.id
@@ -981,6 +1009,7 @@ fn list_sources_with_connection(connection: &Connection) -> Result<Vec<Source>, 
                 article_count: row.get(9)?,
                 unread_count: row.get::<_, Option<i64>>(10)?.unwrap_or(0),
                 category: row.get(11)?,
+                refresh_interval_seconds: row.get(12)?,
             })
         })
         .map_err(|error| error.to_string())?;

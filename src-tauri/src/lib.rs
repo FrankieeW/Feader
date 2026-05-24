@@ -314,6 +314,24 @@ async fn preview_xpath_source(
     xpath_adapter::preview_xpath_source(url, &selectors).await
 }
 
+/// Preview extracted articles for a JSON API feed source.
+#[tauri::command]
+async fn preview_json_api_source(
+    request: PreviewXPathSourceRequest,
+    _database: tauri::State<'_, AppDatabase>,
+) -> Result<XPathPreview, String> {
+    let url = request.url.trim();
+    if url.is_empty() {
+        return Err("JSON feed URL is required".to_string());
+    }
+    let feed = json_adapter::fetch_json_feed(url, &request.selectors, None).await?;
+    Ok(XPathPreview {
+        articles: feed.articles,
+        diagnostics: Vec::new(),
+        next_page_url: None,
+    })
+}
+
 /// Add an XPath source after validating that selectors can extract articles.
 #[tauri::command]
 async fn add_xpath_source(
@@ -599,6 +617,7 @@ pub fn run() {
             suggest_xpath_source,
             add_source,
             preview_xpath_source,
+            preview_json_api_source,
             add_xpath_source,
             add_json_api_source,
             update_xpath_source,

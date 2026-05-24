@@ -710,6 +710,7 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       return undefined as T;
     }
     case "preview_xpath_source":
+    case "preview_json_api_source":
       return {
         articles: testModeArticleState
           .slice(0, 3)
@@ -1178,7 +1179,9 @@ function App() {
     setDialogStatus("Previewing...");
     setIsDialogBusy(true);
     try {
-      const preview = await invoke<XPathPreview>("preview_xpath_source", {
+      const command =
+        showPluginDialog?.kind === "json-api-feed" ? "preview_json_api_source" : "preview_xpath_source";
+      const preview = await invoke<XPathPreview>(command, {
         request: { url, selectors },
       });
       setDialogPreview(preview);
