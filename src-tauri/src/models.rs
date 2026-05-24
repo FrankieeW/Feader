@@ -148,6 +148,8 @@ pub struct XPathSelectors {
     pub published_at: Option<String>,
     pub author: Option<String>,
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_content: Option<String>,
     pub image: Option<String>,
     pub next_page: Option<String>,
 }

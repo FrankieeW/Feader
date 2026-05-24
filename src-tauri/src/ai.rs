@@ -42,6 +42,8 @@ struct SuggestedSelectors {
     image: Option<String>,
     #[serde(rename = "nextPage")]
     next_page: Option<String>,
+    #[serde(rename = "detailContent")]
+    detail_content: Option<String>,
 }
 
 fn extract_json_object(text: &str) -> Option<String> {
@@ -92,6 +94,7 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
             published_at: keep_valid(raw.published_at),
             author: keep_valid(raw.author),
             content: keep_valid(raw.content),
+            detail_content: keep_valid(raw.detail_content),
             image: keep_valid(raw.image),
             next_page: keep_valid(raw.next_page),
         },

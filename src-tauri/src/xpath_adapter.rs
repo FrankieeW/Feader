@@ -13,6 +13,7 @@ use crate::models::{
 use crate::plugin_registry;
 
 const MAX_XPATH_PAGES: usize = 5;
+const MAX_XPATH_DETAIL_ARTICLES: usize = 20;
 const XPATH_FETCH_TIMEOUT_SECONDS: u64 = 20;
 const BODY_SNIPPET_CAP: usize = 120;
 
@@ -166,7 +167,7 @@ pub async fn fetch_xpath_source(
             Err(error) if first_page => return Err(error),
             Err(_) => break,
         };
-        articles.extend(feed.articles);
+        articles.extend(enrich_articles_with_detail_content(feed.articles, selectors).await?);
         first_page = false;
 
         match next_page_url(&current, &normalized, selectors) {
@@ -187,7 +188,9 @@ pub async fn preview_xpath_source(
     selectors: &XPathSelectors,
 ) -> Result<XPathPreview, String> {
     let body = fetch_page(url).await?;
-    preview_xpath_document(url, &normalize_html_document(&body)?, selectors)
+    let mut preview = preview_xpath_document(url, &normalize_html_document(&body)?, selectors)?;
+    enrich_preview_with_detail_content(&mut preview.articles, selectors).await?;
+    Ok(preview)
 }
 
 /// Fetch a URL and return its normalized (real-world-tolerant) XHTML.
@@ -345,6 +348,80 @@ pub fn parse_xpath_source(
         title: None,
         articles,
     })
+}
+
+async fn enrich_articles_with_detail_content(
+    mut articles: Vec<ParsedArticle>,
+    selectors: &XPathSelectors,
+) -> Result<Vec<ParsedArticle>, String> {
+    let Some(selector) = selectors
+        .detail_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(articles);
+    };
+    compile_xpath(selector)?;
+
+    for article in articles.iter_mut().take(MAX_XPATH_DETAIL_ARTICLES) {
+        if article.content_html.is_some() || article.content_text.is_some() {
+            continue;
+        }
+        if let Ok(Some(content_html)) = fetch_detail_content_html(&article.url, selector).await {
+            article.content_html = Some(content_html);
+        }
+    }
+
+    Ok(articles)
+}
+
+async fn enrich_preview_with_detail_content(
+    articles: &mut [ParsedArticle],
+    selectors: &XPathSelectors,
+) -> Result<(), String> {
+    let Some(selector) = selectors
+        .detail_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    compile_xpath(selector)?;
+
+    for article in articles.iter_mut().take(3) {
+        if let Ok(Some(content_text)) = fetch_detail_content_text(&article.url, selector).await {
+            article.content_text = Some(content_text);
+        }
+    }
+
+    Ok(())
+}
+
+async fn fetch_detail_content_html(url: &str, selector: &str) -> Result<Option<String>, String> {
+    let body = fetch_page(url).await?;
+    let document = normalize_html_document(&body)?;
+    extract_detail_content_html(&document, selector)
+}
+
+async fn fetch_detail_content_text(url: &str, selector: &str) -> Result<Option<String>, String> {
+    let body = fetch_page(url).await?;
+    let document = normalize_html_document(&body)?;
+    let package = parser::parse(&document).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    Ok(preview_optional_string(
+        Node::Root(package.as_document().root()),
+        Some(selector),
+    ))
+}
+
+fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<String>, String> {
+    let package = parser::parse(document).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    evaluate_content_html(Node::Root(package.as_document().root()), Some(selector))
 }
 
 /// Preview a static HTML/XML document string with field-level selector diagnostics.
@@ -1003,6 +1080,7 @@ mod tests {
             published_at: Some(".//time/@datetime".to_string()),
             author: Some(".//*[contains(@class, 'author')]/text()".to_string()),
             content: Some(".//section/text()".to_string()),
+            detail_content: None,
             image: Some(".//img/@src".to_string()),
             next_page: None,
         }
@@ -1271,6 +1349,7 @@ mod tests {
             published_at: None,
             author: None,
             content: None,
+            detail_content: None,
             image: Some(".//img/@src".to_string()),
             next_page: None,
         };
@@ -1315,6 +1394,7 @@ mod tests {
             published_at: None,
             author: None,
             content: None,
+            detail_content: None,
             image: None,
             next_page: None,
         };
@@ -1380,6 +1460,7 @@ mod tests {
             published_at: Some(".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]".to_string()),
             author: Some(".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
             content: None,
+            detail_content: Some("//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]".to_string()),
             image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
             next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
         };
@@ -1402,6 +1483,30 @@ mod tests {
             preview.next_page_url.as_deref(),
             Some("https://forum.naixi.net/forum-64-2.html")
         );
+
+        let detail_document = normalize_html_document(
+            r#"
+            <html><body>
+              <div id="postlist">
+                <table><tr><td class="t_f" id="postmessage_160912">
+                  原来年底到期的学生认证。<br />
+                  发邮件来要求重新验证了。
+                </td></tr></table>
+              </div>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes detail");
+        let detail_html = extract_detail_content_html(
+            &detail_document,
+            selectors
+                .detail_content
+                .as_deref()
+                .expect("detail selector"),
+        )
+        .expect("extracts detail")
+        .expect("detail content exists");
+        assert!(detail_html.contains("原来年底到期"));
     }
 
     #[test]
@@ -1433,6 +1538,7 @@ mod tests {
             published_at: None,
             author: None,
             content: None,
+            detail_content: None,
             image: None,
             next_page: None,
         };

@@ -89,6 +89,7 @@ type XPathSelectors = {
   publishedAt?: string;
   author?: string;
   content?: string;
+  detailContent?: string;
   image?: string;
   nextPage?: string;
 };
@@ -199,6 +200,7 @@ const defaultXPathSelectors: XPathSelectors = {
   publishedAt: ".//time/@datetime",
   author: "",
   content: ".",
+  detailContent: "",
   image: ".//img/@src",
   nextPage: "",
 };
@@ -212,6 +214,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     publishedAt: ".//time/@datetime",
     author: "",
     content: ".//section",
+    detailContent: "",
     image: ".//img/@src",
     nextPage: "//a[@rel='next']/@href",
   },
@@ -223,6 +226,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     publishedAt: "",
     author: "",
     content: "",
+    detailContent: "",
     image: ".//img/@src",
     nextPage: "",
   },
@@ -405,6 +409,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           publishedAt: ".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]",
           author: ".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]",
           content: "",
+          detailContent: "//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]",
           image: ".//a[contains(@class, 'kmimg')]//img/@src",
           nextPage: "//a[contains(@class, 'nxt')]/@href",
         },
@@ -2629,6 +2634,7 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
     ["Date", selectors.publishedAt],
     ["Author", selectors.author],
     ["Content", selectors.content],
+    ["Detail content", selectors.detailContent],
     ["Image", selectors.image],
     ["Next page", selectors.nextPage],
   ];
@@ -3111,6 +3117,14 @@ function XPathSourceForm({
         />
         <SelectorInput
           disabled={isBusy}
+          hint="Document-level selector on each article URL, e.g. //*[@id='postmessage_123']"
+          label="Detail content"
+          name="detailContent"
+          onChange={onSelectorsChange}
+          selectors={selectors}
+        />
+        <SelectorInput
+          disabled={isBusy}
           label="Image"
           name="image"
           onChange={onSelectorsChange}
@@ -3213,6 +3227,7 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     publishedAt: emptyToUndefined(selectors.publishedAt),
     author: emptyToUndefined(selectors.author),
     content: emptyToUndefined(selectors.content),
+    detailContent: emptyToUndefined(selectors.detailContent),
     image: emptyToUndefined(selectors.image),
     nextPage: emptyToUndefined(selectors.nextPage),
   };
@@ -3227,6 +3242,7 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     publishedAt: selectors.publishedAt?.trim() || "",
     author: selectors.author?.trim() || "",
     content: selectors.content?.trim() || "",
+    detailContent: selectors.detailContent?.trim() || "",
     image: selectors.image?.trim() || "",
     nextPage: selectors.nextPage?.trim() || "",
   };

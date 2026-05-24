@@ -1074,6 +1074,7 @@ mod tests {
             published_at: None,
             author: None,
             content: None,
+            detail_content: None,
             image: None,
             next_page: None,
         };
