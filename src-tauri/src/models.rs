@@ -227,6 +227,8 @@ pub struct XPathRulePack {
     pub name: String,
     pub version: String,
     pub api_version: String,
+    #[serde(default)]
+    pub kind: String,
     pub registry: String,
     pub trust: String,
     pub description: String,
@@ -266,7 +268,32 @@ pub struct PluginParameters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sections: Option<Vec<PluginSection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Vec<PluginParam>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub defaults: Option<PluginDefaults>,
+}
+
+/// A user-configurable parameter for the plugin source dialog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginParam {
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub r#type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<ParamOption>>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParamOption {
+    pub value: String,
+    pub label: String,
 }
 
 /// A navigable section tree node for forum/site plugins.

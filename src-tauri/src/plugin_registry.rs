@@ -137,6 +137,7 @@ pub async fn fetch_remote_plugin_pack(
         name: pack.name,
         version: pack.version,
         api_version: manifest.feader_api_version,
+        kind: manifest.kind.clone(),
         registry: OFFICIAL_REGISTRY.to_string(),
         trust: "official".to_string(),
         description: pack
@@ -282,6 +283,7 @@ fn rule_pack(
         name: name.to_string(),
         version: version.to_string(),
         api_version: STATIC_XPATH_API_VERSION.to_string(),
+        kind: STATIC_XPATH_KIND.to_string(),
         registry: OFFICIAL_REGISTRY.to_string(),
         trust: "bundled-official".to_string(),
         description: description.to_string(),
