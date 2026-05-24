@@ -6,6 +6,7 @@ mod db;
 mod feed_adapter;
 mod models;
 mod plugin_registry;
+mod json_adapter;
 mod xpath_adapter;
 
 use std::fs;
@@ -291,6 +292,31 @@ async fn add_xpath_source(
     database.get_source(source.id)
 }
 
+/// Add a JSON API feed source after validating it can extract articles.
+#[tauri::command]
+async fn add_json_api_source(
+    request: AddXPathSourceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    let url = request.url.trim();
+    let title = request.title.trim();
+    if url.is_empty() {
+        return Err("JSON feed URL is required".to_string());
+    }
+    if title.is_empty() {
+        return Err("Source title is required".to_string());
+    }
+
+    let feed = json_adapter::fetch_json_feed(url, &request.selectors, None).await?;
+    if feed.articles.is_empty() {
+        return Err("JSON selectors did not extract any articles".to_string());
+    }
+
+    let source = database.add_json_api_source(url, title, &request.selectors)?;
+    database.upsert_articles(source.id, Some(title), &feed.articles)?;
+    database.get_source(source.id)
+}
+
 /// Update an XPath source after validating the new selectors against the same static page.
 #[tauri::command]
 async fn update_xpath_source(
@@ -431,6 +457,11 @@ async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Resul
             let selectors = parse_xpath_selectors(source)?;
             xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
         }
+        "json-api" => {
+            let selectors = parse_xpath_selectors(source)?;
+            let cookie = selectors.cookie.clone().filter(|c| !c.trim().is_empty());
+            json_adapter::fetch_json_feed(&source.url, &selectors, cookie.as_deref()).await
+        }
         kind => Err(format!("Source kind '{kind}' is not refreshable yet")),
     };
 
@@ -500,6 +531,7 @@ pub fn run() {
             add_source,
             preview_xpath_source,
             add_xpath_source,
+            add_json_api_source,
             update_xpath_source,
             update_source_title,
             set_source_category,

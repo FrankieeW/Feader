@@ -61,6 +61,18 @@ impl AppDatabase {
         self.add_source_with_kind("xpath", url, Some(title), Some(&config_json))
     }
 
+    /// Insert a JSON API feed source and persist its selector configuration.
+    pub fn add_json_api_source(
+        &self,
+        url: &str,
+        title: &str,
+        selectors: &XPathSelectors,
+    ) -> Result<Source, String> {
+        let config_json =
+            serde_json::to_string(selectors).map_err(|e| format!("Serialize JSON selectors: {e}"))?;
+        self.add_source_with_kind("json-api", url, Some(title), Some(&config_json))
+    }
+
     /// Create a single-use SIWE challenge for local wallet login.
     pub fn create_wallet_login_challenge(
         &self,
