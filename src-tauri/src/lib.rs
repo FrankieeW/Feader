@@ -118,9 +118,15 @@ async fn suggest_xpath_source(
     }
     let raw_key = database.raw_ai_api_key()?;
     let html = xpath_adapter::fetch_normalized(url).await?;
+    if xpath_adapter::looks_like_interstitial_document(&html) {
+        return Err(
+            "Fetched page is an anti-bot or browser-check page, not the static page content."
+                .to_string(),
+        );
+    }
     let mut suggestion = ai::suggest_xpath_selectors(&settings, &raw_key, &html).await?;
     suggestion.selectors =
-        xpath_adapter::improve_xpath_selectors_for_preview(url, &html, &suggestion.selectors);
+        xpath_adapter::select_best_xpath_selectors_for_preview(url, &html, &suggestion.selectors);
     Ok(suggestion)
 }
 

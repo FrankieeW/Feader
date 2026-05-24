@@ -171,8 +171,20 @@ fn body_snippet(body: &str) -> String {
 
 fn normalize_html_document(raw: &str) -> Result<String, String> {
     reject_non_html_body(raw, "")?;
+    if looks_like_interstitial_document(raw) {
+        return Err(
+            "XPath sources require the static HTML page, but this URL returned an anti-bot or browser-check page."
+                .to_string(),
+        );
+    }
     let normalized = normalize_html(raw);
     let trimmed = normalized.trim_start();
+    if looks_like_interstitial_document(trimmed) {
+        return Err(
+            "XPath sources require the static HTML page, but this URL returned an anti-bot or browser-check page."
+                .to_string(),
+        );
+    }
     if !(trimmed.starts_with('<') || trimmed.starts_with("<?xml")) {
         return Err(format!(
             "XPath sources require an HTML/XML page, but normalization produced non-XML content: {}",
@@ -180,6 +192,14 @@ fn normalize_html_document(raw: &str) -> Result<String, String> {
         ));
     }
     Ok(normalized)
+}
+
+pub fn looks_like_interstitial_document(document: &str) -> bool {
+    let lower = document.to_ascii_lowercase();
+    lower.contains("just a moment")
+        || lower.contains("cf_chl")
+        || lower.contains("challenge-platform")
+        || lower.contains("enable javascript and cookies to continue")
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -400,7 +420,35 @@ pub fn preview_xpath_document(
 /// are absolute to the document instead of relative to each item. The adapter extracts
 /// fields from each item node, so validate against the same normalized document and
 /// repair required fields with conservative relative candidates.
-pub fn improve_xpath_selectors_for_preview(
+pub fn select_best_xpath_selectors_for_preview(
+    base_url: &str,
+    document: &str,
+    selectors: &XPathSelectors,
+) -> XPathSelectors {
+    let mut candidates = vec![repair_required_selectors_for_preview(
+        base_url, document, selectors,
+    )];
+    candidates.extend(
+        known_selector_candidates(document)
+            .into_iter()
+            .map(|candidate| repair_required_selectors_for_preview(base_url, document, &candidate)),
+    );
+
+    candidates
+        .into_iter()
+        .enumerate()
+        .max_by_key(|(index, candidate)| {
+            preview_selector_score(base_url, document, candidate) + known_candidate_bonus(*index)
+        })
+        .map(|(_, candidate)| candidate)
+        .unwrap_or_else(|| selectors.clone())
+}
+
+fn known_candidate_bonus(index: usize) -> usize {
+    usize::from(index > 0) * 25
+}
+
+fn repair_required_selectors_for_preview(
     base_url: &str,
     document: &str,
     selectors: &XPathSelectors,
@@ -446,6 +494,99 @@ pub fn improve_xpath_selectors_for_preview(
     }
 
     improved
+}
+
+fn known_selector_candidates(document: &str) -> Vec<XPathSelectors> {
+    let lower = document.to_ascii_lowercase();
+    let mut candidates = Vec::new();
+
+    if lower.contains("threadlisttableid")
+        || lower.contains("km_subject")
+        || lower.contains("discuz")
+    {
+        candidates.push(XPathSelectors {
+            items: "//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]".to_string(),
+            title: ".//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]"
+                .to_string(),
+            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href"
+                .to_string(),
+            summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]"
+                .to_string()),
+            published_at: Some(
+                ".//*[contains(concat(' ', normalize-space(@class), ' '), ' kmtime ')]/*[@title][1]/@title"
+                    .to_string(),
+            ),
+            author: Some(".//div[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
+            content: None,
+            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmimg ')]//img/@src".to_string()),
+            next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' nxt ')]/@href".to_string()),
+        });
+    }
+
+    if lower.contains("vodlist_item")
+        || lower.contains("detail_list_box")
+        || lower.contains("maccms")
+        || lower.contains("vod/detail")
+    {
+        candidates.push(XPathSelectors {
+            items: "//li[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_item ')]"
+                .to_string(),
+            title: ".//*[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_title ')]//a[1]".to_string(),
+            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@href".to_string(),
+            summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_sub ')]".to_string()),
+            published_at: None,
+            author: None,
+            content: None,
+            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
+            next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' page-link ') and contains(., '下一')]/@href".to_string()),
+        });
+        candidates.push(XPathSelectors {
+            items: "//div[contains(concat(' ', normalize-space(@class), ' '), ' detail_list_box ')]//div[contains(concat(' ', normalize-space(@class), ' '), ' content_box ')][1]".to_string(),
+            title: ".//h2[contains(concat(' ', normalize-space(@class), ' '), ' title ')]".to_string(),
+            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' btn_primary ')]/@href".to_string(),
+            summary: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
+            published_at: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')]/em[1]".to_string()),
+            author: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')][span[contains(., '主演')]]/a[1]".to_string()),
+            content: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
+            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
+            next_page: None,
+        });
+    }
+
+    candidates.push(XPathSelectors {
+        items: "//article".to_string(),
+        title: ".//h1 | .//h2 | .//h3 | .//a[normalize-space()][1]".to_string(),
+        url: ".//a[@href][1]/@href".to_string(),
+        summary: Some(".//p[normalize-space()][1]".to_string()),
+        published_at: Some(".//time/@datetime | .//time".to_string()),
+        author: Some(".//*[contains(@class, 'author')][1]".to_string()),
+        content: Some(".".to_string()),
+        image: Some(".//img[@src][1]/@src".to_string()),
+        next_page: Some("//a[@rel='next']/@href | //a[contains(@class, 'next')]/@href".to_string()),
+    });
+
+    candidates
+}
+
+fn preview_selector_score(base_url: &str, document: &str, selectors: &XPathSelectors) -> usize {
+    let Ok(preview) = preview_xpath_document(base_url, document, selectors) else {
+        return 0;
+    };
+    let article_score = preview.articles.len().min(5) * 100;
+    let diagnostic_score = preview
+        .diagnostics
+        .iter()
+        .map(
+            |diagnostic| match (diagnostic.required, diagnostic.status.as_str()) {
+                (true, "ok") => 40,
+                (true, _) => 0,
+                (false, "ok") => 8,
+                _ => 0,
+            },
+        )
+        .sum::<usize>();
+    let next_page_score = usize::from(preview.next_page_url.is_some()) * 10;
+    article_score + diagnostic_score + next_page_score
 }
 
 fn first_working_required_selector(
@@ -1082,7 +1223,7 @@ mod tests {
         assert!(broken.articles.is_empty());
 
         let improved =
-            improve_xpath_selectors_for_preview("https://example.com/list", &document, &draft);
+            select_best_xpath_selectors_for_preview("https://example.com/list", &document, &draft);
         let preview = preview_xpath_document("https://example.com/list", &document, &improved)
             .expect("previews improved selectors");
 
@@ -1091,6 +1232,105 @@ mod tests {
         assert_eq!(preview.articles.len(), 2);
         assert_eq!(preview.articles[0].title, "First title");
         assert_eq!(preview.articles[0].url, "https://example.com/one");
+    }
+
+    #[test]
+    fn selects_discuz_thread_candidate_over_bad_ai_draft() {
+        let document = normalize_html_document(
+            r#"
+            <html><body>
+              <ul id="threadlisttableid">
+                <li class="kmlist common">
+                  <a class="kmtit" href="thread-1-1-1.html"><span class="km_subject">Forum title</span></a>
+                  <div class="kminfo"><a href="space-uid-1.html">Ada</a><span class="kmtime">发表于 <span title="2026-5-24">today</span></span></div>
+                </li>
+              </ul>
+              <a class="nxt" href="forum.php?page=2">下一页</a>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes");
+        let draft = XPathSelectors {
+            items: "//li".to_string(),
+            title: ".//h2".to_string(),
+            url: ".//h2/a/@href".to_string(),
+            summary: None,
+            published_at: None,
+            author: None,
+            content: None,
+            image: None,
+            next_page: None,
+        };
+
+        let selected =
+            select_best_xpath_selectors_for_preview("https://forum.example/", &document, &draft);
+        let preview = preview_xpath_document("https://forum.example/", &document, &selected)
+            .expect("previews selected forum selectors");
+
+        assert_eq!(preview.articles.len(), 1);
+        assert_eq!(preview.articles[0].title, "Forum title");
+        assert_eq!(
+            preview.articles[0].url,
+            "https://forum.example/thread-1-1-1.html"
+        );
+        assert_eq!(preview.articles[0].author.as_deref(), Some("Ada"));
+        assert_eq!(
+            preview.next_page_url.as_deref(),
+            Some("https://forum.example/forum.php?page=2")
+        );
+    }
+
+    #[test]
+    fn selects_maccms_detail_candidate_for_single_detail_page() {
+        let document = normalize_html_document(
+            r#"
+            <html><body>
+              <div class="detail_list_box">
+                <div class="content_box">
+                  <a class="vodlist_thumb" href="/index.php/vod/play/id/81060/sid/1/nid/1.html" data-original="https://img.example/poster.png"></a>
+                  <h2 class="title">Video title</h2>
+                  <ul>
+                    <li class="data"><span>状态：</span><span class="data_style">更新至第07集</span> / <em>05-19</em></li>
+                    <li class="data"><span>主演：</span><a href="/actor/a">Actor A</a></li>
+                    <li class="desc"><span>简介：</span>Video summary</li>
+                  </ul>
+                  <a class="btn btn_primary" href="/index.php/vod/play/id/81060/sid/1/nid/1.html">立即播放</a>
+                </div>
+              </div>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes");
+        let draft = XPathSelectors {
+            items: "//li".to_string(),
+            title: ".//h2".to_string(),
+            url: ".//h2/a/@href".to_string(),
+            summary: None,
+            published_at: None,
+            author: None,
+            content: None,
+            image: None,
+            next_page: None,
+        };
+
+        let selected = select_best_xpath_selectors_for_preview(
+            "https://video.example/detail",
+            &document,
+            &draft,
+        );
+        let preview = preview_xpath_document("https://video.example/detail", &document, &selected)
+            .expect("previews selected video selectors");
+
+        assert_eq!(preview.articles.len(), 1);
+        assert_eq!(preview.articles[0].title, "Video title");
+        assert_eq!(
+            preview.articles[0].url,
+            "https://video.example/index.php/vod/play/id/81060/sid/1/nid/1.html"
+        );
+        assert_eq!(
+            preview.articles[0].image_url.as_deref(),
+            Some("https://img.example/poster.png")
+        );
     }
 
     #[test]
@@ -1103,5 +1343,13 @@ mod tests {
     fn rejects_json_like_normalized_document() {
         let error = normalize_html_document("{\"items\":[]}").unwrap_err();
         assert!(error.contains("returned JSON-like content"));
+    }
+
+    #[test]
+    fn rejects_cloudflare_challenge_page() {
+        let error =
+            normalize_html_document("<html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={}</script></body></html>")
+                .unwrap_err();
+        assert!(error.contains("anti-bot"));
     }
 }

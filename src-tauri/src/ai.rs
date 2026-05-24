@@ -96,6 +96,7 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
 }
 
 fn build_prompt(html: &str) -> String {
+    let page_rules = page_type_rules(html);
     format!(
         "Generate XPath selectors for an article-listing page from the normalized XHTML below.\n\
          You must return exactly one JSON object and nothing else.\n\
@@ -106,12 +107,44 @@ fn build_prompt(html: &str) -> String {
          Fill every selector field you can infer with reasonable confidence, especially summary, date, author, content, image, and nextPage.\n\
          Keep selectors short and robust. Prefer one stable semantic/tag/class selector over long union expressions.\n\
          Avoid absolute positional paths like /html/body/div[3]/div[2].\n\
+         Use the page-specific rules below before generic rules. If the page is an anti-bot/challenge page, return empty selectors.\n\n\
+         Page-specific rules:\n{page_rules}\n\n\
          The entire response must be a complete JSON object that starts with {{ and ends with }}.\n\
          Do not use Markdown. Do not explain. Do not wrap in code fences.\n\n\
          Example output:\n\
          {{\"sourceTitle\":\"Example Blog\",\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\".//*[contains(@class,'author')]\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
          Normalized XHTML:\n{html}"
     )
+}
+
+fn page_type_rules(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut rules = Vec::new();
+
+    if lower.contains("just a moment")
+        || lower.contains("cf_chl")
+        || lower.contains("challenge-platform")
+    {
+        rules.push("- Detected anti-bot/challenge markup. Do not infer content selectors from this page; return empty XPath strings.");
+    }
+    if lower.contains("threadlisttableid")
+        || lower.contains("km_subject")
+        || lower.contains("discuz")
+    {
+        rules.push("- Discuz/forum thread list: prefer items `//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]`, title `.//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]`, url `.//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href`, author from the first `space-uid` link inside `.kminfo`, date from `.kmtime/*[@title]/@title`, next page from `.nxt/@href`.");
+    }
+    if lower.contains("vodlist_item") || lower.contains("maccms") || lower.contains("vod/detail") {
+        rules.push("- MacCMS/video pages: for a listing, prefer `//li[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_item ')]` with title under `.vodlist_title`, url/image from `.vodlist_thumb` href/data-original, summary from `.vodlist_sub`. For a detail page, a valid single-item source may use the first `.detail_list_box .content_box`, title from `h2.title`, url from `.btn_primary/@href`, image from `.vodlist_thumb/@data-original`, summary/content from `.desc`.");
+    }
+    if lower.contains("book") || lower.contains("novel") || lower.contains("/c/") {
+        rules.push("- Novel/category pages: prefer repeated book cards/list rows, title/url from the book detail link, author from nearby author text/link, summary from the description paragraph, image from cover `img/@src`, and nextPage from rel/next or pagination next link.");
+    }
+
+    if rules.is_empty() {
+        rules.push("- Generic listing: first identify the smallest repeated node that contains one stable title link. Avoid navigation, footer, sidebar, ad, and ranking widgets unless the whole page is a ranking source.");
+    }
+
+    rules.join("\n")
 }
 
 /// Ask the configured provider to suggest selectors for a page's HTML.
@@ -342,6 +375,15 @@ mod tests {
             extract_model_text(&completion).as_deref(),
             Some("{\"items\":\"//article\"}")
         );
+    }
+
+    #[test]
+    fn prompt_includes_page_specific_rules() {
+        let prompt = build_prompt(
+            r#"<html><body><ul id="threadlisttableid"><li class="kmlist"><span class="km_subject">A</span></li></ul></body></html>"#,
+        );
+        assert!(prompt.contains("Discuz/forum thread list"));
+        assert!(prompt.contains("threadlisttableid"));
     }
 
     #[test]
