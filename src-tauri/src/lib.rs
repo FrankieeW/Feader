@@ -5,6 +5,7 @@ pub mod cli;
 mod db;
 mod feed_adapter;
 mod models;
+mod plugin_registry;
 mod xpath_adapter;
 
 use std::fs;
@@ -15,7 +16,7 @@ use models::{
     AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
     CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, Source, SourceRefreshResult,
     UpdateSourceTitleRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
-    XPathPreview, XPathSelectors, XPathSourceSuggestion,
+    XPathPreview, XPathRulePack, XPathSelectors, XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use tauri::Manager;
@@ -99,6 +100,12 @@ fn set_ai_settings(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<AiSettings, String> {
     database.set_ai_settings(&input)
+}
+
+/// Return bundled static XPath plugin packs.
+#[tauri::command]
+fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
+    plugin_registry::bundled_xpath_rule_packs()
 }
 
 /// Suggest XPath selectors for a page using the configured AI provider.
@@ -372,6 +379,7 @@ pub fn run() {
             disconnect_wallet_login,
             get_ai_settings,
             set_ai_settings,
+            list_xpath_plugin_packs,
             suggest_xpath_source,
             add_source,
             preview_xpath_source,

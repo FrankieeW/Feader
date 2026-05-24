@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::models::{env_reference_name, AiSettings, XPathSelectors, XPathSourceSuggestion};
+use crate::plugin_registry;
 use crate::xpath_adapter::is_valid_xpath;
 
 const AI_HTML_CHAR_CAP: usize = 6_000;
@@ -125,23 +126,11 @@ fn page_type_rules(html: &str) -> String {
         || lower.contains("cf_chl")
         || lower.contains("challenge-platform")
     {
-        rules.push("- Detected anti-bot/challenge markup. Do not infer content selectors from this page; return empty XPath strings.");
+        rules.push("- Detected anti-bot/challenge markup. Do not infer content selectors from this page; return empty XPath strings.".to_string());
     }
-    if lower.contains("threadlisttableid")
-        || lower.contains("km_subject")
-        || lower.contains("discuz")
-    {
-        rules.push("- Discuz/forum thread list: prefer items `//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]`, title `.//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]`, url `.//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href`, author from the first `space-uid` link inside `.kminfo`, date from `.kmtime/*[@title]/@title`, next page from `.nxt/@href`.");
-    }
-    if lower.contains("vodlist_item") || lower.contains("maccms") || lower.contains("vod/detail") {
-        rules.push("- MacCMS/video pages: for a listing, prefer `//li[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_item ')]` with title under `.vodlist_title`, url/image from `.vodlist_thumb` href/data-original, summary from `.vodlist_sub`. For a detail page, a valid single-item source may use the first `.detail_list_box .content_box`, title from `h2.title`, url from `.btn_primary/@href`, image from `.vodlist_thumb/@data-original`, summary/content from `.desc`.");
-    }
+    rules.extend(plugin_registry::matching_prompt_rules(html));
     if lower.contains("book") || lower.contains("novel") || lower.contains("/c/") {
-        rules.push("- Novel/category pages: prefer repeated book cards/list rows, title/url from the book detail link, author from nearby author text/link, summary from the description paragraph, image from cover `img/@src`, and nextPage from rel/next or pagination next link.");
-    }
-
-    if rules.is_empty() {
-        rules.push("- Generic listing: first identify the smallest repeated node that contains one stable title link. Avoid navigation, footer, sidebar, ad, and ranking widgets unless the whole page is a ranking source.");
+        rules.push("- Novel/category pages: prefer repeated book cards/list rows, title/url from the book detail link, author from nearby author text/link, summary from the description paragraph, image from cover `img/@src`, and nextPage from rel/next or pagination next link.".to_string());
     }
 
     rules.join("\n")

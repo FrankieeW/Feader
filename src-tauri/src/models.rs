@@ -160,6 +160,33 @@ pub struct XPathSourceSuggestion {
     pub selectors: XPathSelectors,
 }
 
+/// A static plugin pack that contributes XPath and AI-assist rules.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathRulePack {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub api_version: String,
+    pub registry: String,
+    pub trust: String,
+    pub description: String,
+    pub capabilities: Vec<String>,
+    pub candidates: Vec<XPathRuleCandidate>,
+}
+
+/// One page-family rule contributed by a static XPath plugin pack.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathRuleCandidate {
+    pub id: String,
+    pub page_type: String,
+    pub priority: usize,
+    pub detect: Vec<String>,
+    pub prompt_rule: String,
+    pub selectors: XPathSelectors,
+}
+
 /// Preview diagnostics for a single XPath selector field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

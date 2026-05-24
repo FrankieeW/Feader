@@ -10,6 +10,7 @@ use url::Url;
 use crate::models::{
     ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathSelectors,
 };
+use crate::plugin_registry;
 
 const MAX_XPATH_PAGES: usize = 5;
 const XPATH_FETCH_TIMEOUT_SECONDS: u64 = 20;
@@ -581,75 +582,7 @@ fn repair_required_selectors_for_preview(
 }
 
 fn known_selector_candidates(document: &str) -> Vec<XPathSelectors> {
-    let lower = document.to_ascii_lowercase();
-    let mut candidates = Vec::new();
-
-    if lower.contains("threadlisttableid")
-        || lower.contains("km_subject")
-        || lower.contains("discuz")
-    {
-        candidates.push(XPathSelectors {
-            items: "//ul[@id='threadlisttableid']/li[contains(concat(' ', normalize-space(@class), ' '), ' kmlist ')]".to_string(),
-            title: ".//*[contains(concat(' ', normalize-space(@class), ' '), ' km_subject ')]"
-                .to_string(),
-            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmtit ')]/@href"
-                .to_string(),
-            summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]"
-                .to_string()),
-            published_at: Some(
-                ".//*[contains(concat(' ', normalize-space(@class), ' '), ' kmtime ')]/*[@title][1]/@title"
-                    .to_string(),
-            ),
-            author: Some(".//div[contains(concat(' ', normalize-space(@class), ' '), ' kminfo ')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
-            content: None,
-            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' kmimg ')]//img/@src".to_string()),
-            next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' nxt ')]/@href".to_string()),
-        });
-    }
-
-    if lower.contains("vodlist_item")
-        || lower.contains("detail_list_box")
-        || lower.contains("maccms")
-        || lower.contains("vod/detail")
-    {
-        candidates.push(XPathSelectors {
-            items: "//li[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_item ')]"
-                .to_string(),
-            title: ".//*[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_title ')]//a[1]".to_string(),
-            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@href".to_string(),
-            summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_sub ')]".to_string()),
-            published_at: None,
-            author: None,
-            content: None,
-            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
-            next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' page-link ') and contains(., '下一')]/@href".to_string()),
-        });
-        candidates.push(XPathSelectors {
-            items: "//div[contains(concat(' ', normalize-space(@class), ' '), ' detail_list_box ')]//div[contains(concat(' ', normalize-space(@class), ' '), ' content_box ')][1]".to_string(),
-            title: ".//h2[contains(concat(' ', normalize-space(@class), ' '), ' title ')]".to_string(),
-            url: ".//a[contains(concat(' ', normalize-space(@class), ' '), ' btn_primary ')]/@href".to_string(),
-            summary: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
-            published_at: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')]/em[1]".to_string()),
-            author: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')][span[contains(., '主演')]]/a[1]".to_string()),
-            content: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
-            image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
-            next_page: None,
-        });
-    }
-
-    candidates.push(XPathSelectors {
-        items: "//article".to_string(),
-        title: ".//h1 | .//h2 | .//h3 | .//a[normalize-space()][1]".to_string(),
-        url: ".//a[@href][1]/@href".to_string(),
-        summary: Some(".//p[normalize-space()][1]".to_string()),
-        published_at: Some(".//time/@datetime | .//time".to_string()),
-        author: Some(".//*[contains(@class, 'author')][1]".to_string()),
-        content: Some(".".to_string()),
-        image: Some(".//img[@src][1]/@src".to_string()),
-        next_page: Some("//a[@rel='next']/@href | //a[contains(@class, 'next')]/@href".to_string()),
-    });
-
-    candidates
+    plugin_registry::matching_selector_candidates(document)
 }
 
 fn preview_selector_score(base_url: &str, document: &str, selectors: &XPathSelectors) -> usize {

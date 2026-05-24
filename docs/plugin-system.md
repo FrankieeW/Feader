@@ -2,6 +2,36 @@
 
 Feader should treat RSS as the best path, not the only path. Many useful sources do not expose RSS, expose broken feeds, or require site-specific extraction. The plugin system exists to bring those sources into the same article pipeline without hardcoding every website into the app.
 
+## Implementation Status
+
+Feader now supports the first plugin layer: **static XPath rule packs**. These are data-only packs that contribute:
+
+- XPath selector candidates.
+- AI prompt rules for page families.
+- Page-type detection markers.
+
+The built-in packs are bundled in Feader for bootstrapping, but the schema is designed to move provider-specific packs into **FeaderHub**, the official registry repository. Static packs are intentionally not executable. More powerful script/runtime plugins remain a later layer with stricter permissions and signing.
+
+Current bundled packs:
+
+- `official.discuz.xpath` — Discuz-style forum thread lists.
+- `official.maccms.xpath` — MacCMS video list and detail pages.
+- `official.generic-html.xpath` — generic fallback article listings.
+
+The Tauri command `list_xpath_plugin_packs` exposes bundled static packs to the renderer. During AI XPath suggestion, Feader uses matching pack prompt rules and then scores all matching selector candidates with the existing preview diagnostics.
+
+## Registry Direction
+
+The official registry should live outside Feader Core in `FrankieeW/FeaderHub`. FeaderHub should publish:
+
+- Registry index files.
+- Plugin manifests.
+- Static XPath rule pack JSON files.
+- Checksums and future signatures.
+- Compatibility metadata.
+
+Users should eventually be able to add third-party registries or import local packs. Feader Core remains responsible for checksum verification, signature verification, permission display, and refusing silent permission expansion on update.
+
 ## Goals
 
 - Prefer native RSS or Atom when a source supports it well.
