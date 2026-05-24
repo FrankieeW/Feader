@@ -348,6 +348,17 @@ pub fn looks_like_interstitial_document(document: &str) -> bool {
     browser_check_title || cloudflare_interstitial
 }
 
+/// Effective cookie precedence: non-empty source override → plugin cookie → none.
+pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) -> Option<String> {
+    let pick = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    pick(source_cookie).or_else(|| pick(plugin_cookie))
+}
+
 /// Extract articles from a static HTML/XML document string.
 pub fn parse_xpath_source(
     base_url: &str,
@@ -1300,6 +1311,24 @@ mod tests {
             plugin: None,
             reader: None,
         }
+    }
+
+    #[test]
+    fn resolves_cookie_precedence() {
+        // source override wins
+        assert_eq!(
+            resolve_cookie(Some("src=1"), Some("plugin=2")).as_deref(),
+            Some("src=1")
+        );
+        // falls back to plugin cookie
+        assert_eq!(
+            resolve_cookie(None, Some("plugin=2")).as_deref(),
+            Some("plugin=2")
+        );
+        assert_eq!(resolve_cookie(Some("   "), Some("plugin=2")).as_deref(), Some("plugin=2"));
+        // none
+        assert_eq!(resolve_cookie(None, None), None);
+        assert_eq!(resolve_cookie(Some(""), None), None);
     }
 
     #[test]
