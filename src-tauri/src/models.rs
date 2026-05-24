@@ -138,7 +138,7 @@ pub fn is_env_reference(value: &str) -> bool {
 }
 
 /// XPath selectors for a static HTML/XML source.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XPathSelectors {
     pub items: String,
@@ -147,6 +147,8 @@ pub struct XPathSelectors {
     pub summary: Option<String>,
     pub published_at: Option<String>,
     pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<String>,
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail_content: Option<String>,
@@ -177,8 +179,27 @@ pub struct XPathRulePack {
     pub description: String,
     pub capabilities: Vec<String>,
     pub candidates: Vec<XPathRuleCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<PluginAuthor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<PluginParameters>,
+}
+
+/// Public author metadata displayed in the plugin Hub.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginAuthor {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evm_address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_id: Option<String>,
 }
 
 /// Optional parameter block for source creation dialogs.
@@ -243,6 +264,8 @@ pub struct RemotePluginManifest {
     pub feader_api_version: String,
     pub description: Option<String>,
     pub entry: String,
+    #[serde(default)]
+    pub authors: Vec<PluginAuthor>,
 }
 
 /// Remote xpath-rule-pack payload.

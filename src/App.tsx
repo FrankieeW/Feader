@@ -88,6 +88,7 @@ type XPathSelectors = {
   summary?: string;
   publishedAt?: string;
   author?: string;
+  cookie?: string;
   content?: string;
   detailContent?: string;
   image?: string;
@@ -136,7 +137,17 @@ type XPathRulePack = {
   description: string;
   capabilities: string[];
   candidates: XPathRuleCandidate[];
+  authors?: PluginAuthor[];
   parameters?: PluginParameters | null;
+};
+
+type PluginAuthor = {
+  name: string;
+  evmAddress?: string | null;
+  avatarUrl?: string | null;
+  website?: string | null;
+  email?: string | null;
+  githubId?: string | null;
 };
 
 type ParsedArticle = {
@@ -200,6 +211,7 @@ const defaultXPathSelectors: XPathSelectors = {
   summary: ".//p/text()",
   publishedAt: ".//time/@datetime",
   author: "",
+  cookie: "",
   content: ".",
   detailContent: "",
   image: ".//img/@src",
@@ -215,6 +227,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     summary: ".//p",
     publishedAt: ".//time/@datetime",
     author: "",
+    cookie: "",
     content: ".//section",
     detailContent: "",
     image: ".//img/@src",
@@ -228,6 +241,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     summary: "",
     publishedAt: "",
     author: "",
+    cookie: "",
     content: "",
     detailContent: "",
     image: ".//img/@src",
@@ -399,6 +413,16 @@ const testModeXPathRulePacks: XPathRulePack[] = [
     trust: "official",
     description: "Static XPath rules for naixi.net forum thread lists with section-based browsing.",
     capabilities: ["xpath.selectorCandidates"],
+    authors: [
+      {
+        name: "Frankie Wang",
+        evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
+        avatarUrl: "https://github.com/FrankieeW.png",
+        website: "https://github.com/FrankieeW",
+        email: "git@frankie.wang",
+        githubId: "FrankieeW",
+      },
+    ],
     candidates: [
       {
         id: "naixi-forum-thread-list",
@@ -412,6 +436,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           summary: ".//*[contains(@class, 'kmfoot')]",
           publishedAt: ".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]",
           author: ".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]",
+          cookie: "",
           content: "",
           detailContent: "//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]",
           image: ".//a[contains(@class, 'kmimg')]//img/@src",
@@ -768,6 +793,7 @@ function App() {
   const [dialogSectionId, setDialogSectionId] = useState("");
   const [dialogCandidateId, setDialogCandidateId] = useState("");
   const [dialogMaxItems, setDialogMaxItems] = useState<number | undefined>();
+  const [dialogCookie, setDialogCookie] = useState("");
   const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
   const [dialogStatus, setDialogStatus] = useState<string | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
@@ -953,6 +979,7 @@ function App() {
     setDialogTitle(pluginSourceTitle(pack, firstSection));
     setDialogCandidateId(firstCandidate?.id ?? "");
     setDialogMaxItems(firstCandidate?.selectors.maxItems ?? pack.parameters?.defaults?.maxItems);
+    setDialogCookie(firstCandidate?.selectors.cookie ?? "");
     setDialogPreview(null);
     setDialogStatus(null);
     setShowPluginDialog(pack);
@@ -972,6 +999,7 @@ function App() {
     if (!candidate) return null;
     return {
       ...candidate.selectors,
+      cookie: dialogCookie.trim() || undefined,
       maxItems: dialogMaxItems,
     };
   }
@@ -1900,6 +1928,7 @@ function App() {
                         </span>
                       </div>
                       <p className="hub-card-desc">{pack.description}</p>
+                      <PluginAuthorPanel pack={pack} />
                       <div className="hub-card-meta">
                         <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
                         <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
@@ -1951,6 +1980,7 @@ function App() {
                         </span>
                       </div>
                       <p className="hub-card-desc">{pack.description}</p>
+                      <PluginAuthorPanel pack={pack} />
                       <div className="hub-card-meta">
                         <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
                         <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
@@ -2081,6 +2111,18 @@ function App() {
                   placeholder="No limit"
                   type="number"
                   value={dialogMaxItems ?? ""}
+                />
+              </label>
+
+              <label className="dialog-field">
+                <span>Cookie</span>
+                <input
+                  aria-label="Cookie header"
+                  disabled={isDialogBusy}
+                  onChange={(e) => setDialogCookie(e.currentTarget.value)}
+                  placeholder="name=value; ... or $FEADER_NAIXI_COOKIE"
+                  type="password"
+                  value={dialogCookie}
                 />
               </label>
 
@@ -2662,6 +2704,7 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
     ["Summary", selectors.summary],
     ["Date", selectors.publishedAt],
     ["Author", selectors.author],
+    ["Cookie", cookieSummary(selectors.cookie)],
     ["Content", selectors.content],
     ["Detail content", selectors.detailContent],
     ["Image", selectors.image],
@@ -2689,6 +2732,53 @@ function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string
     return `奶昔论坛 · ${sectionName}`;
   }
   return `${pack.name} · ${sectionName}`;
+}
+
+function PluginAuthorPanel({ pack }: { pack: XPathRulePack }) {
+  const author = pack.authors?.[0];
+  if (!author) return null;
+  const profileUrl = author.website || (author.githubId ? `https://github.com/${author.githubId}` : undefined);
+  return (
+    <div className="hub-author">
+      {author.avatarUrl ? <img alt="" className="hub-author-avatar" src={author.avatarUrl} /> : null}
+      <div className="hub-author-main">
+        <div className="hub-author-line">
+          {profileUrl ? (
+            <a href={profileUrl} rel="noreferrer" target="_blank">
+              {author.name}
+            </a>
+          ) : (
+            <span>{author.name}</span>
+          )}
+          {author.githubId ? <span>@{author.githubId}</span> : null}
+        </div>
+        <div className="hub-author-links">
+          {author.email ? <a href={`mailto:${author.email}`}>Email</a> : null}
+          {author.evmAddress ? (
+            <a href={evmDonateUri(author.evmAddress)} rel="noreferrer" target="_blank">
+              Donate
+            </a>
+          ) : null}
+        </div>
+      </div>
+      {author.evmAddress ? (
+        <img
+          alt="EVM donation QR"
+          className="hub-donate-qr"
+          src={qrImageUrl(evmDonateUri(author.evmAddress))}
+          title={author.evmAddress}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function evmDonateUri(address: string): string {
+  return `ethereum:${address}`;
+}
+
+function qrImageUrl(value: string): string {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=112x112&data=${encodeURIComponent(value)}`;
 }
 
 function CategoryPicker({
@@ -3138,6 +3228,22 @@ function XPathSourceForm({
           onChange={onSelectorsChange}
           selectors={selectors}
         />
+        <label className="selector-input">
+          <span>Cookie</span>
+          <input
+            disabled={isBusy}
+            onChange={(event) =>
+              onSelectorsChange({
+                ...selectors,
+                cookie: event.currentTarget.value,
+              })
+            }
+            placeholder="name=value; ... or $ENV_NAME"
+            type="password"
+            value={selectors.cookie ?? ""}
+          />
+          <small className="selector-hint">Sent as the Cookie header for list and detail pages.</small>
+        </label>
         <SelectorInput
           disabled={isBusy}
           label="Content"
@@ -3272,6 +3378,7 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     summary: emptyToUndefined(selectors.summary),
     publishedAt: emptyToUndefined(selectors.publishedAt),
     author: emptyToUndefined(selectors.author),
+    cookie: emptyToUndefined(selectors.cookie),
     content: emptyToUndefined(selectors.content),
     detailContent: emptyToUndefined(selectors.detailContent),
     image: emptyToUndefined(selectors.image),
@@ -3288,6 +3395,7 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     summary: selectors.summary?.trim() || "",
     publishedAt: selectors.publishedAt?.trim() || "",
     author: selectors.author?.trim() || "",
+    cookie: selectors.cookie?.trim() || "",
     content: selectors.content?.trim() || "",
     detailContent: selectors.detailContent?.trim() || "",
     image: selectors.image?.trim() || "",
@@ -3310,6 +3418,12 @@ function readXPathSelectorsFromSource(source: Source): XPathSelectors {
 function emptyToUndefined(value?: string): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function cookieSummary(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.startsWith("$") ? trimmed : "Set";
 }
 
 function parseOptionalPositiveInt(value: string): number | undefined {

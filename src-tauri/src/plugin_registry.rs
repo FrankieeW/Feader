@@ -141,6 +141,7 @@ pub async fn fetch_remote_plugin_pack(
             .unwrap_or_default(),
         capabilities: vec!["xpath.selectorCandidates".to_string()],
         candidates: pack.candidates,
+        authors: manifest.authors,
         parameters: pack.parameters,
     })
 }
@@ -277,6 +278,7 @@ fn rule_pack(
             "ai.promptRules".to_string(),
         ],
         candidates,
+        authors: Vec::new(),
         parameters: None,
     }
 }
@@ -318,6 +320,7 @@ fn discuz_rule_pack() -> XPathRulePack {
                 summary: Some(".//*[contains(@class, 'kminfo')]".to_string()),
                 published_at: Some(".//*[contains(@class, 'kmtime')]/*[@title][1]/@title".to_string()),
                 author: Some(".//div[contains(@class, 'kminfo')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
+                cookie: None,
                 content: None,
                 detail_content: Some("//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]".to_string()),
                 image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
@@ -348,6 +351,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     summary: Some(".//*[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_sub ')]".to_string()),
                     published_at: None,
                     author: None,
+                    cookie: None,
                     content: None,
                     detail_content: None,
                     image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
@@ -368,6 +372,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     summary: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
                     published_at: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')]/em[1]".to_string()),
                     author: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' data ')][span[contains(., '主演')]]/a[1]".to_string()),
+                    cookie: None,
                     content: Some(".//li[contains(concat(' ', normalize-space(@class), ' '), ' desc ')]".to_string()),
                     detail_content: None,
                     image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
@@ -398,6 +403,7 @@ fn generic_rule_pack() -> XPathRulePack {
                 summary: Some(".//p[normalize-space()][1]".to_string()),
                 published_at: Some(".//time/@datetime | .//time".to_string()),
                 author: Some(".//*[contains(@class, 'author')][1]".to_string()),
+                cookie: None,
                 content: Some(".".to_string()),
                 detail_content: None,
                 image: Some(".//img[@src][1]/@src".to_string()),

@@ -1073,6 +1073,7 @@ mod tests {
             summary: None,
             published_at: None,
             author: None,
+            cookie: None,
             content: None,
             detail_content: None,
             image: None,

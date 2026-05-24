@@ -1154,6 +1154,58 @@ input:disabled {
   overflow: hidden;
 }
 
+/* Author */
+
+.hub-author {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 58px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-soft);
+}
+
+.hub-author-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.hub-author-main {
+  min-width: 0;
+}
+
+.hub-author-line,
+.hub-author-links {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.hub-author-line a,
+.hub-author-links a {
+  color: var(--color-action);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.hub-author-line span {
+  color: var(--color-muted);
+}
+
+.hub-donate-qr {
+  width: 58px;
+  height: 58px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
 /* Meta */
 
 .hub-card-meta {
@@ -2232,6 +2284,8 @@ input:focus-visible,
 
 .dialog-field input[type="url"],
 .dialog-field input[type="text"],
+.dialog-field input[type="number"],
+.dialog-field input[type="password"],
 .dialog-field select {
   padding: 8px 12px;
   border: 1px solid var(--color-border);

@@ -93,6 +93,7 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
             summary: keep_valid(raw.summary),
             published_at: keep_valid(raw.published_at),
             author: keep_valid(raw.author),
+            cookie: None,
             content: keep_valid(raw.content),
             detail_content: keep_valid(raw.detail_content),
             image: keep_valid(raw.image),

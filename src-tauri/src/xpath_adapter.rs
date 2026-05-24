@@ -8,7 +8,8 @@ use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
 use crate::models::{
-    ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathRulePack, XPathSelectors,
+    env_reference_name, ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview,
+    XPathRulePack, XPathSelectors,
 };
 use crate::plugin_registry;
 
@@ -160,7 +161,7 @@ pub async fn fetch_xpath_source(
         // The first page is the source's primary content: its failure fails the
         // refresh. Later pages are best-effort — a failure there keeps the
         // articles already gathered instead of discarding the whole refresh.
-        let body = match fetch_page(&current).await {
+        let body = match fetch_page(&current, selectors).await {
             Ok(body) => body,
             Err(error) if first_page => return Err(error),
             Err(_) => break,
@@ -194,7 +195,7 @@ pub async fn preview_xpath_source(
     url: &str,
     selectors: &XPathSelectors,
 ) -> Result<XPathPreview, String> {
-    let body = fetch_page(url).await?;
+    let body = fetch_page(url, selectors).await?;
     let mut preview = preview_xpath_document(url, &normalize_html_document(&body)?, selectors)?;
     enrich_preview_with_detail_content(&mut preview.articles, selectors).await?;
     Ok(preview)
@@ -202,7 +203,7 @@ pub async fn preview_xpath_source(
 
 /// Fetch a URL and return its normalized (real-world-tolerant) XHTML.
 pub async fn fetch_normalized(url: &str) -> Result<String, String> {
-    let body = fetch_page(url).await?;
+    let body = fetch_page(url, &XPathSelectors::default()).await?;
     normalize_html_document(&body)
 }
 
@@ -211,16 +212,16 @@ pub fn is_valid_xpath(expression: &str) -> bool {
     Factory::new().build(expression).ok().flatten().is_some()
 }
 
-async fn fetch_page(url: &str) -> Result<String, String> {
-    let response = reqwest::Client::builder()
+async fn fetch_page(url: &str, selectors: &XPathSelectors) -> Result<String, String> {
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(XPATH_FETCH_TIMEOUT_SECONDS))
         .build()
-        .map_err(|error| error.to_string())?
-        .get(url)
-        .header("user-agent", "Feader/0.1")
-        .send()
-        .await
         .map_err(|error| error.to_string())?;
+    let mut request = client.get(url).header("user-agent", "Feader/0.1");
+    if let Some(cookie) = cookie_header_value(selectors)? {
+        request = request.header(reqwest::header::COOKIE, cookie);
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
         return Err(format!("XPath source request failed with status {status}"));
@@ -235,6 +236,23 @@ async fn fetch_page(url: &str) -> Result<String, String> {
     let body = response.text().await.map_err(|error| error.to_string())?;
     reject_non_html_body(&body, &content_type)?;
     Ok(body)
+}
+
+fn cookie_header_value(selectors: &XPathSelectors) -> Result<Option<String>, String> {
+    let Some(value) = selectors
+        .cookie
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if let Some(name) = env_reference_name(value) {
+        return std::env::var(&name)
+            .map(|cookie| Some(cookie.trim().to_string()))
+            .map_err(|_| format!("Cookie environment variable {name} is not set"));
+    }
+    Ok(Some(value.to_string()))
 }
 
 fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
@@ -375,7 +393,9 @@ async fn enrich_articles_with_detail_content(
         if article.content_html.is_some() || article.content_text.is_some() {
             continue;
         }
-        if let Ok(Some(content_html)) = fetch_detail_content_html(&article.url, selector).await {
+        if let Ok(Some(content_html)) =
+            fetch_detail_content_html(&article.url, selector, selectors).await
+        {
             article.content_html = Some(content_html);
         }
     }
@@ -398,7 +418,9 @@ async fn enrich_preview_with_detail_content(
     compile_xpath(selector)?;
 
     for article in articles.iter_mut().take(3) {
-        if let Ok(Some(content_text)) = fetch_detail_content_text(&article.url, selector).await {
+        if let Ok(Some(content_text)) =
+            fetch_detail_content_text(&article.url, selector, selectors).await
+        {
             article.content_text = Some(content_text);
         }
     }
@@ -406,14 +428,22 @@ async fn enrich_preview_with_detail_content(
     Ok(())
 }
 
-async fn fetch_detail_content_html(url: &str, selector: &str) -> Result<Option<String>, String> {
-    let body = fetch_page(url).await?;
+async fn fetch_detail_content_html(
+    url: &str,
+    selector: &str,
+    selectors: &XPathSelectors,
+) -> Result<Option<String>, String> {
+    let body = fetch_page(url, selectors).await?;
     let document = normalize_html_document(&body)?;
     extract_detail_content_html(&document, selector)
 }
 
-async fn fetch_detail_content_text(url: &str, selector: &str) -> Result<Option<String>, String> {
-    let body = fetch_page(url).await?;
+async fn fetch_detail_content_text(
+    url: &str,
+    selector: &str,
+    selectors: &XPathSelectors,
+) -> Result<Option<String>, String> {
+    let body = fetch_page(url, selectors).await?;
     let document = normalize_html_document(&body)?;
     let package = parser::parse(&document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
@@ -1094,6 +1124,7 @@ mod tests {
             summary: Some(".//p/text()".to_string()),
             published_at: Some(".//time/@datetime".to_string()),
             author: Some(".//*[contains(@class, 'author')]/text()".to_string()),
+            cookie: None,
             content: Some(".//section/text()".to_string()),
             detail_content: None,
             image: Some(".//img/@src".to_string()),
@@ -1364,6 +1395,7 @@ mod tests {
             summary: None,
             published_at: None,
             author: None,
+            cookie: None,
             content: None,
             detail_content: None,
             image: Some(".//img/@src".to_string()),
@@ -1410,6 +1442,7 @@ mod tests {
             summary: None,
             published_at: None,
             author: None,
+            cookie: None,
             content: None,
             detail_content: None,
             image: None,
@@ -1477,6 +1510,7 @@ mod tests {
             summary: Some(".//*[contains(@class, 'kmfoot')]".to_string()),
             published_at: Some(".//*[contains(@class, 'kmtime')]/*[@title][1]/@title | .//*[contains(@class, 'kmtime')]".to_string()),
             author: Some(".//*[contains(@class, 'kmfoot')]/a[starts-with(@href, 'space-uid')][1]".to_string()),
+            cookie: None,
             content: None,
             detail_content: Some("//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]".to_string()),
             image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
@@ -1565,6 +1599,7 @@ mod tests {
             summary: None,
             published_at: None,
             author: None,
+            cookie: None,
             content: None,
             detail_content: None,
             image: None,
