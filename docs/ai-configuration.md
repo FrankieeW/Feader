@@ -4,8 +4,10 @@ Feader can use an AI model to suggest XPath selectors for a page. The model is a
 
 ## Providers
 
-- **OpenAI-compatible**: works with OpenAI and servers exposing `/chat/completions`, including OpenRouter, Ollama, LM Studio, and gateways. Base URL example: `https://api.openai.com/v1`. Model example: `gpt-4o-mini`.
-- **Anthropic**: native Messages API. Base URL: `https://api.anthropic.com`. Model example: `claude-haiku-4-5`.
+- **OpenAI-compatible**: works with OpenAI and servers exposing `/chat/completions`, including OpenRouter, Ollama, LM Studio, and gateways. Endpoint example: `https://api.openai.com/v1/chat/completions`. Model example: `gpt-4o-mini`.
+- **Anthropic**: native Messages API. Endpoint example: `https://api.anthropic.com/v1/messages`. Model example: `claude-haiku-4-5`.
+
+Feader sends requests to the endpoint exactly as configured. It does not append `/chat/completions` or `/v1/messages` for you.
 
 ## API Key
 

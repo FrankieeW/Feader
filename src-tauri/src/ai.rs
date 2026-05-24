@@ -141,7 +141,7 @@ pub async fn suggest_xpath_selectors(
 }
 
 async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
-    let endpoint = format!("{}/v1/messages", settings.base_url.trim_end_matches('/'));
+    let endpoint = configured_endpoint(&settings.base_url);
     let body = serde_json::json!({
         "model": &settings.model,
         "max_tokens": AI_OUTPUT_TOKEN_CAP,
@@ -171,7 +171,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
 }
 
 async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
-    let endpoint = format!("{}/chat/completions", settings.base_url.trim_end_matches('/'));
+    let endpoint = configured_endpoint(&settings.base_url);
     let json_body = serde_json::json!({
         "model": &settings.model,
         "max_tokens": AI_OUTPUT_TOKEN_CAP,
@@ -228,6 +228,10 @@ fn ai_http_client() -> Result<reqwest::Client, String> {
         .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECONDS))
         .build()
         .map_err(|error| error.to_string())
+}
+
+fn configured_endpoint(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
 }
 
 fn response_snippet(text: &str) -> String {
@@ -323,6 +327,14 @@ mod tests {
         assert_eq!(
             extract_model_text(&completion).as_deref(),
             Some("{\"items\":\"//article\"}")
+        );
+    }
+
+    #[test]
+    fn uses_configured_endpoint_without_appending_path() {
+        assert_eq!(
+            configured_endpoint("https://api.example.com/custom/messages/"),
+            "https://api.example.com/custom/messages"
         );
     }
 
