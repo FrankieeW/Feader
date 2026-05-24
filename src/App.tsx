@@ -869,6 +869,7 @@ function App() {
   const { disconnectAsync } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
   const [sources, setSources] = useState<Source[]>([]);
+  const [pendingDelete, setPendingDelete] = useState<{ id: number; title: string } | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<number | undefined>();
   const [selectedManagerSourceId, setSelectedManagerSourceId] = useState<number | undefined>();
@@ -1417,11 +1418,11 @@ function App() {
     });
   }
 
+  function requestDeleteSource(sourceId: number, title: string): void {
+    setPendingDelete({ id: sourceId, title });
+  }
+
   async function handleDeleteSourceId(sourceId: number, title: string): Promise<void> {
-    const confirmed = window.confirm(`Delete "${title}" and its articles?`);
-    if (!confirmed) {
-      return;
-    }
     const remainingSources = sources.filter((source) => source.id !== sourceId);
     const nextManagerSourceId = remainingSources[0]?.id;
     const nextReaderSourceId = selectedSourceId === sourceId ? undefined : selectedSourceId;
@@ -1446,7 +1447,7 @@ function App() {
         setSelectedArticleId(undefined);
       }
       await loadData(nextReaderSourceId, filterMode, nextArticleId);
-      setStatus("Feed deleted");
+      setStatus(`Deleted "${title}"`);
     });
   }
 
@@ -1710,7 +1711,7 @@ function App() {
                               aria-label={`Delete ${source.title}`}
                               className="feed-delete"
                               disabled={isBusy}
-                              onClick={() => void handleDeleteSourceId(source.id, source.title)}
+                              onClick={() => requestDeleteSource(source.id, source.title)}
                               title="Delete feed"
                               type="button"
                             >
@@ -1759,7 +1760,7 @@ function App() {
                     aria-label={`Delete ${source.title}`}
                     className="feed-delete"
                     disabled={isBusy}
-                    onClick={() => void handleDeleteSourceId(source.id, source.title)}
+                    onClick={() => requestDeleteSource(source.id, source.title)}
                     title="Delete feed"
                     type="button"
                   >
@@ -1986,7 +1987,7 @@ function App() {
                 setEditXPathPreview(null);
                 setEditXPathStatus(null);
               }}
-              onDelete={(id, title) => void handleDeleteSourceId(id, title)}
+              onDelete={(id, title) => requestDeleteSource(id, title)}
               onOpenInReader={(sourceId) => {
                 setActiveView("reader");
                 void handleSelectSource(sourceId);
@@ -2353,6 +2354,48 @@ function App() {
                 onClick={handleDialogAddSource}
               >
                 Add Source
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+
+      {pendingDelete ? (
+        <div className="dialog-overlay" onClick={() => setPendingDelete(null)}>
+          <section
+            aria-label="Confirm delete feed"
+            className="dialog-panel confirm-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <h2>Delete feed</h2>
+            </header>
+            <div className="dialog-body">
+              <p>
+                Delete &ldquo;{pendingDelete.title}&rdquo; and all of its articles? This cannot be
+                undone.
+              </p>
+            </div>
+            <footer className="dialog-footer">
+              <button
+                className="secondary-action"
+                disabled={isBusy}
+                onClick={() => setPendingDelete(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-action"
+                disabled={isBusy}
+                onClick={() => {
+                  const target = pendingDelete;
+                  setPendingDelete(null);
+                  void handleDeleteSourceId(target.id, target.title);
+                }}
+                type="button"
+              >
+                Delete feed
               </button>
             </footer>
           </section>

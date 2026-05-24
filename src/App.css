@@ -2589,3 +2589,18 @@ input:focus-visible,
   padding: 12px 20px 16px;
   border-top: 1px solid var(--color-border);
 }
+
+.dialog-footer .danger-action {
+  width: auto;
+  margin-top: 0;
+}
+
+.confirm-dialog {
+  width: min(420px, 90vw);
+}
+
+.confirm-dialog .dialog-body p {
+  margin: 0;
+  color: var(--color-muted);
+  line-height: 1.5;
+}
