@@ -193,7 +193,7 @@ type ReaderConfig = {
 
 type PluginAuth = {
   checkUrl: string;
-  loggedInXPath: string;
+  loggedInXpath: string;
 };
 
 type PluginCredential = {
@@ -565,7 +565,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
     ],
     auth: {
       checkUrl: "https://forum.naixi.net/home.php?mod=spacecp",
-      loggedInXPath: "//a[contains(@href,'logout') or contains(@href,'action=logout')]",
+      loggedInXpath: "//a[contains(@href,'logout') or contains(@href,'action=logout')]",
     },
     parameters: {
       urlTemplate: "https://forum.naixi.net/{sectionId}.html",
@@ -2398,7 +2398,7 @@ function App() {
                           const result = await invoke<CredentialCheck>("check_plugin_credential", {
                             pluginId: showPluginDialog.id,
                             checkUrl: showPluginDialog.auth!.checkUrl,
-                            loggedInXpath: showPluginDialog.auth!.loggedInXPath,
+                            loggedInXpath: showPluginDialog.auth!.loggedInXpath,
                           });
                           setCredentialCheck(result);
                         } catch (error) {

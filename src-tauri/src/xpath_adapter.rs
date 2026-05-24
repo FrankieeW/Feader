@@ -27,17 +27,36 @@ fn normalize_html(raw: &str) -> String {
     let handle: markup5ever_rcdom::SerializableHandle = dom.document.clone().into();
 
     let mut buffer = Vec::new();
-    if xml5ever::serialize::serialize(
+    let serialized = if xml5ever::serialize::serialize(
         &mut buffer,
         &handle,
         xml5ever::serialize::SerializeOpts::default(),
     )
-    .is_err()
+    .is_ok()
     {
-        return raw.to_string();
-    }
+        String::from_utf8(buffer).ok()
+    } else {
+        None
+    };
 
-    let xml = String::from_utf8(buffer).unwrap_or_else(|_| raw.to_string());
+    let xml = match serialized {
+        Some(value) if !value.is_empty() => value,
+        _ => {
+            let mut html_buf = Vec::new();
+            if html5ever::serialize::serialize(
+                &mut html_buf,
+                &handle,
+                html5ever::serialize::SerializeOpts::default(),
+            )
+            .is_err()
+            {
+                return raw.to_string();
+            }
+            let html = String::from_utf8(html_buf).unwrap_or_else(|_| raw.to_string());
+            close_void_elements(&html)
+        }
+    };
+
     let without_namespaces = xml
         .replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
         .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
@@ -45,6 +64,20 @@ fn normalize_html(raw: &str) -> String {
     sanitize_xml_attribute_values(&escape_invalid_xml_ampersands(&strip_leading_doctype(
         &without_namespaces,
     )))
+}
+
+/// Turn HTML-style void tags into XML self-closing tags so sxd_document can parse them.
+fn close_void_elements(html: &str) -> String {
+    let void_pattern =
+        regex::Regex::new(r"<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\s[^>]*)?>")
+            .expect("valid void-element regex");
+    void_pattern
+        .replace_all(html, |captures: &regex::Captures<'_>| {
+            let tag = captures.get(1).map_or("", |m| m.as_str());
+            let attrs = captures.get(2).map_or("", |m| m.as_str());
+            format!("<{tag}{attrs}/>")
+        })
+        .into_owned()
 }
 
 fn strip_leading_doctype(value: &str) -> String {
