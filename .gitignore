@@ -61,3 +61,4 @@ temp/
 # AI
 .omx/
 .omc/
+.worktrees/
