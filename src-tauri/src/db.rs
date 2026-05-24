@@ -3,10 +3,16 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, ToSql};
 
-use crate::models::{Article, ArticleFilter, ParsedArticle, Source, XPathSelectors};
+use crate::models::{
+    Article, ArticleFilter, ParsedArticle, Source, WalletLoginChallenge, WalletSession,
+    XPathSelectors,
+};
+
+const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
+const WALLET_CHALLENGE_TTL_MINUTES: i64 = 10;
 
 /// Thread-safe application database handle.
 pub struct AppDatabase {
@@ -53,6 +59,171 @@ impl AppDatabase {
     ) -> Result<Source, String> {
         let config_json = serde_json::to_string(selectors).map_err(|error| error.to_string())?;
         self.add_source_with_kind("xpath", url, Some(title), Some(&config_json))
+    }
+
+    /// Create a single-use SIWE challenge for local wallet login.
+    pub fn create_wallet_login_challenge(
+        &self,
+        domain: &str,
+        uri: &str,
+        nonce: &str,
+    ) -> Result<WalletLoginChallenge, String> {
+        let domain = domain.trim();
+        let uri = uri.trim();
+        if domain.is_empty() {
+            return Err("Wallet login domain is required".to_string());
+        }
+        if uri.is_empty() {
+            return Err("Wallet login URI is required".to_string());
+        }
+
+        let issued_at = Utc::now();
+        let expires_at = issued_at + Duration::minutes(WALLET_CHALLENGE_TTL_MINUTES);
+        let issued_at = issued_at.to_rfc3339();
+        let expires_at = expires_at.to_rfc3339();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+
+        connection
+            .execute(
+                "
+                INSERT INTO wallet_login_challenges (
+                    nonce, domain, uri, statement, issued_at, expires_at, consumed_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+                ",
+                params![
+                    nonce,
+                    domain,
+                    uri,
+                    WALLET_LOGIN_STATEMENT,
+                    issued_at,
+                    expires_at
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(WalletLoginChallenge {
+            nonce: nonce.to_string(),
+            domain: domain.to_string(),
+            uri: uri.to_string(),
+            statement: WALLET_LOGIN_STATEMENT.to_string(),
+            issued_at,
+            expires_at,
+        })
+    }
+
+    /// Consume a SIWE challenge by nonce, rejecting expired or replayed nonces.
+    pub fn consume_wallet_login_challenge(
+        &self,
+        nonce: &str,
+        domain: &str,
+        uri: &str,
+    ) -> Result<(), String> {
+        let now = Utc::now().to_rfc3339();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let updated = connection
+            .execute(
+                "
+                UPDATE wallet_login_challenges
+                SET consumed_at = ?1
+                WHERE nonce = ?2
+                  AND domain = ?3
+                  AND uri = ?4
+                  AND consumed_at IS NULL
+                  AND expires_at > ?1
+                ",
+                params![now, nonce, domain, uri],
+            )
+            .map_err(|error| error.to_string())?;
+
+        if updated == 0 {
+            return Err("Wallet login challenge is expired, replayed, or mismatched".to_string());
+        }
+        Ok(())
+    }
+
+    /// Persist the verified wallet session and mark it as current.
+    pub fn save_wallet_session(
+        &self,
+        address: &str,
+        chain_id: u64,
+        siwe_message: &str,
+        signature: &str,
+    ) -> Result<WalletSession, String> {
+        let signed_in_at = Utc::now().to_rfc3339();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "
+                INSERT INTO wallet_sessions (
+                    id, address, chain_id, siwe_message, signature, signed_in_at, expires_at,
+                    revoked_at
+                )
+                VALUES (1, ?1, ?2, ?3, ?4, ?5, NULL, NULL)
+                ON CONFLICT(id) DO UPDATE SET
+                    address = excluded.address,
+                    chain_id = excluded.chain_id,
+                    siwe_message = excluded.siwe_message,
+                    signature = excluded.signature,
+                    signed_in_at = excluded.signed_in_at,
+                    expires_at = excluded.expires_at,
+                    revoked_at = NULL
+                ",
+                params![
+                    address,
+                    chain_id as i64,
+                    siwe_message,
+                    signature,
+                    signed_in_at
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(WalletSession {
+            address: address.to_string(),
+            chain_id,
+            signed_in_at,
+            expires_at: None,
+        })
+    }
+
+    /// Return the current local wallet session, if present.
+    pub fn current_wallet_session(&self) -> Result<Option<WalletSession>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        match connection.query_row(
+            "
+            SELECT address, chain_id, signed_in_at, expires_at
+            FROM wallet_sessions
+            WHERE id = 1
+              AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > ?1)
+            ",
+            [Utc::now().to_rfc3339()],
+            |row| {
+                Ok(WalletSession {
+                    address: row.get(0)?,
+                    chain_id: row.get::<_, i64>(1)? as u64,
+                    signed_in_at: row.get(2)?,
+                    expires_at: row.get(3)?,
+                })
+            },
+        ) {
+            Ok(session) => Ok(Some(session)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Revoke the current local wallet session.
+    pub fn disconnect_wallet_session(&self) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE wallet_sessions SET revoked_at = ?1 WHERE id = 1",
+                [Utc::now().to_rfc3339()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
     }
 
     fn add_source_with_kind(
@@ -127,9 +298,7 @@ impl AppDatabase {
         source_id: i64,
         category: Option<&str>,
     ) -> Result<Source, String> {
-        let normalized = category
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let normalized = category.map(str::trim).filter(|value| !value.is_empty());
         let now = now_string();
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
         connection
@@ -437,8 +606,31 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS wallet_login_challenges (
+            nonce TEXT PRIMARY KEY,
+            domain TEXT NOT NULL,
+            uri TEXT NOT NULL,
+            statement TEXT NOT NULL,
+            issued_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS wallet_sessions (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            address TEXT NOT NULL,
+            chain_id INTEGER NOT NULL,
+            siwe_message TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            signed_in_at TEXT NOT NULL,
+            expires_at TEXT,
+            revoked_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
+        CREATE INDEX IF NOT EXISTS idx_wallet_login_challenges_expires_at
+            ON wallet_login_challenges(expires_at);
         ",
     )?;
     add_column_if_missing(

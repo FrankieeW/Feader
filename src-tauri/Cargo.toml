@@ -30,3 +30,5 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sxd-document = "0.3"
 sxd-xpath = "0.4"
 url = "2"
+siwe = "0.6"
+hex = "0.4"

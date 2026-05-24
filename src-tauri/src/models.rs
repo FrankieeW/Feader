@@ -52,6 +52,44 @@ pub struct AddSourceRequest {
     pub title: Option<String>,
 }
 
+/// Request body for creating a SIWE wallet login challenge.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWalletLoginChallengeRequest {
+    pub domain: String,
+    pub uri: String,
+}
+
+/// Single-use SIWE challenge returned to the frontend.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletLoginChallenge {
+    pub nonce: String,
+    pub domain: String,
+    pub uri: String,
+    pub statement: String,
+    pub issued_at: String,
+    pub expires_at: String,
+}
+
+/// Request body for verifying a signed SIWE login message.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyWalletLoginRequest {
+    pub message: String,
+    pub signature: String,
+}
+
+/// Locally verified wallet account session.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletSession {
+    pub address: String,
+    pub chain_id: u64,
+    pub signed_in_at: String,
+    pub expires_at: Option<String>,
+}
+
 /// XPath selectors for a static HTML/XML source.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

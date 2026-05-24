@@ -40,6 +40,10 @@ Core goals:
 - Token-gated or community-specific feed support as a future extension
 - User-owned exportable data model
 
+Wallet login uses local Sign-In with Ethereum verification. Set `VITE_REOWN_PROJECT_ID`
+to enable the Reown AppKit / WalletConnect QR modal; without it, Feader falls back to
+an injected EVM wallet when one is available.
+
 ### Plugin System
 
 - Native RSS and Atom support for standard feeds
@@ -53,4 +57,4 @@ See [docs/evm-wallet-login-plan.md](docs/evm-wallet-login-plan.md) for the EVM w
 
 ## Status
 
-This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation includes local-first RSS/Atom source management, refresh status tracking, normalized articles, read/saved state, and a basic reader panel backed by SQLite.
+This repository has a Tauri, Rust, Vite, React, and TypeScript baseline. The current implementation includes local-first RSS/Atom source management, XPath source preview diagnostics, EVM wallet login through local SIWE verification, refresh status tracking, normalized articles, read/saved state, and a reader workspace backed by SQLite.

@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { useAccount, useConnect, useDisconnect, useSignMessage } from "wagmi";
 import DOMPurify from "dompurify";
+import {
+  isWalletConnectConfigured,
+  openWalletConnectModal,
+} from "./wallet";
 import "./App.css";
 
 type ReaderShortcutEvent = {
@@ -112,6 +117,22 @@ type XPathPreview = {
   articles: ParsedArticle[];
   diagnostics: XPathFieldDiagnostic[];
   nextPageUrl?: string | null;
+};
+
+type WalletLoginChallenge = {
+  nonce: string;
+  domain: string;
+  uri: string;
+  statement: string;
+  issuedAt: string;
+  expiresAt: string;
+};
+
+type WalletSession = {
+  address: string;
+  chainId: number;
+  signedInAt: string;
+  expiresAt?: string | null;
 };
 
 const defaultXPathSelectors: XPathSelectors = {
@@ -312,6 +333,26 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       const request = args?.request as { url?: string; title?: string } | undefined;
       return upsertTestModeSource(request?.url, request?.title) as T;
     }
+    case "create_wallet_login_challenge":
+      return {
+        nonce: "testnonce1",
+        domain: "localhost:1420",
+        uri: "http://localhost:1420",
+        statement: "Sign in to Feader with your Ethereum wallet.",
+        issuedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      } as T;
+    case "get_wallet_session":
+      return null as T;
+    case "verify_wallet_login":
+      return {
+        address: "0x0000000000000000000000000000000000000000",
+        chainId: 1,
+        signedInAt: new Date().toISOString(),
+        expiresAt: null,
+      } as T;
+    case "disconnect_wallet_login":
+      return undefined as T;
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
       const sourceId = Number(request?.sourceId);
@@ -476,6 +517,10 @@ function readInitialCollapsedGroups(): Record<string, boolean> {
 }
 
 function App() {
+  const { address: walletAddress, chainId, isConnected } = useAccount();
+  const { connectAsync, connectors } = useConnect();
+  const { disconnectAsync } = useDisconnect();
+  const { signMessageAsync } = useSignMessage();
   const [sources, setSources] = useState<Source[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<number | undefined>();
@@ -495,6 +540,7 @@ function App() {
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
+  const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
 
@@ -523,6 +569,7 @@ function App() {
 
   useEffect(() => {
     void loadData();
+    void loadWalletSession();
   }, []);
 
   useEffect(() => {
@@ -580,6 +627,60 @@ function App() {
     setSources(nextSources);
     setArticles(nextArticles);
     setSelectedArticleId(resolveSelectedArticleId(nextArticles, nextSelectedArticleId));
+  }
+
+  async function loadWalletSession(): Promise<void> {
+    const session = await invoke<WalletSession | null>("get_wallet_session");
+    setWalletSession(session);
+  }
+
+  async function handleConnectWallet(): Promise<void> {
+    await runTask("Connecting wallet", async () => {
+      if (isWalletConnectConfigured) {
+        await openWalletConnectModal();
+        setStatus("WalletConnect opened. Sign in after connecting your wallet.");
+        return;
+      }
+
+      const connector = connectors.find((item) => item.id === "injected") ?? connectors[0];
+      if (!connector) {
+        throw new Error("No injected wallet is available. Set VITE_REOWN_PROJECT_ID to enable WalletConnect QR login.");
+      }
+      await connectAsync({ connector });
+      setStatus("Wallet connected. Sign in to verify ownership.");
+    });
+  }
+
+  async function handleWalletSignIn(): Promise<void> {
+    if (!walletAddress || !chainId) {
+      setStatus("Connect an EVM wallet before signing in.");
+      return;
+    }
+
+    await runTask("Signing in wallet", async () => {
+      const challenge = await invoke<WalletLoginChallenge>("create_wallet_login_challenge", {
+        request: {
+          domain: window.location.host,
+          uri: window.location.origin,
+        },
+      });
+      const message = buildSiweMessage(challenge, walletAddress, chainId);
+      const signature = await signMessageAsync({ message });
+      const session = await invoke<WalletSession>("verify_wallet_login", {
+        request: { message, signature },
+      });
+      setWalletSession(session);
+      setStatus(`Signed in as ${shortAddress(session.address)}`);
+    });
+  }
+
+  async function handleWalletDisconnect(): Promise<void> {
+    await runTask("Disconnecting wallet", async () => {
+      await invoke<void>("disconnect_wallet_login");
+      await disconnectAsync().catch(() => undefined);
+      setWalletSession(null);
+      setStatus("Wallet disconnected.");
+    });
   }
 
   async function handleAddFeed(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -1244,6 +1345,17 @@ function App() {
               </div>
               <ThemeControl mode={themeMode} onChange={setThemeMode} />
             </article>
+
+            <WalletLoginCard
+              chainId={chainId}
+              isBusy={isBusy}
+              isConnected={isConnected}
+              onConnect={() => void handleConnectWallet()}
+              onDisconnect={() => void handleWalletDisconnect()}
+              onSignIn={() => void handleWalletSignIn()}
+              session={walletSession}
+              walletAddress={walletAddress}
+            />
 
             <article className="settings-card">
               <div className="panel-heading">
@@ -2015,6 +2127,95 @@ function resolveSelectedArticleId(
     return preferredId;
   }
   return articles[0]?.id;
+}
+
+function WalletLoginCard({
+  chainId,
+  isBusy,
+  isConnected,
+  onConnect,
+  onDisconnect,
+  onSignIn,
+  session,
+  walletAddress,
+}: {
+  chainId?: number;
+  isBusy: boolean;
+  isConnected: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSignIn: () => void;
+  session: WalletSession | null;
+  walletAddress?: string;
+}) {
+  const verifiedMatches =
+    Boolean(session && walletAddress) &&
+    session?.address.toLowerCase() === walletAddress?.toLowerCase();
+
+  return (
+    <article className="settings-card wallet-card">
+      <div className="panel-heading">
+        <span>Account</span>
+        <span>{session ? "Verified" : isConnected ? "Connected" : "Local"}</span>
+      </div>
+      <div className="wallet-status">
+        <span>{isWalletConnectConfigured ? "WalletConnect" : "Injected wallet"}</span>
+        <strong>{session ? shortAddress(session.address) : "Not signed in"}</strong>
+        <em>{session ? `Chain ${session.chainId}` : "SIWE local session"}</em>
+      </div>
+      <dl>
+        <dt>Wallet</dt>
+        <dd>{walletAddress ? shortAddress(walletAddress) : "Disconnected"}</dd>
+        <dt>Network</dt>
+        <dd>{chainId ? `Chain ${chainId}` : "Unknown"}</dd>
+        <dt>Session</dt>
+        <dd>{session ? formatDate(session.signedInAt) : "None"}</dd>
+      </dl>
+      <div className="story-actions">
+        <button disabled={isBusy || isConnected} onClick={onConnect} type="button">
+          Connect wallet
+        </button>
+        <button
+          className="primary-action"
+          disabled={isBusy || !isConnected || verifiedMatches}
+          onClick={onSignIn}
+          type="button"
+        >
+          Sign in
+        </button>
+        <button disabled={isBusy || (!isConnected && !session)} onClick={onDisconnect} type="button">
+          Disconnect
+        </button>
+      </div>
+      {!isWalletConnectConfigured ? (
+        <p className="wallet-note">
+          Set VITE_REOWN_PROJECT_ID to enable WalletConnect QR login in the desktop app.
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function buildSiweMessage(
+  challenge: WalletLoginChallenge,
+  address: string,
+  chainId: number,
+): string {
+  return `${challenge.domain} wants you to sign in with your Ethereum account:
+${address}
+
+${challenge.statement}
+
+URI: ${challenge.uri}
+Version: 1
+Chain ID: ${chainId}
+Nonce: ${challenge.nonce}
+Issued At: ${challenge.issuedAt}
+Expiration Time: ${challenge.expiresAt}`;
+}
+
+function shortAddress(address: string): string {
+  return address.length > 12 ? `${address.slice(0, 6)}...${address.slice(-4)}` : address;
 }
 
 function filterLabel(mode: FilterMode): string {

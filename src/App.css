@@ -802,6 +802,33 @@ input:disabled {
   font-weight: 600;
 }
 
+.wallet-status {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--color-panel-soft);
+}
+
+.wallet-status span,
+.wallet-status em,
+.wallet-note {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.wallet-status strong {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+}
+
+.wallet-note {
+  margin: 0;
+  line-height: 1.4;
+}
+
 .source-health-strip .health-chip.healthy {
   color: var(--color-success);
   border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border));
