@@ -815,11 +815,11 @@ function App() {
   const [dialogUrl, setDialogUrl] = useState("");
   const [dialogTitle, setDialogTitle] = useState("");
   const [dialogSectionId, setDialogSectionId] = useState("");
-  const [dialogMaxItems, setDialogMaxItems] = useState(20);
-  const [dialogMaxPages, setDialogMaxPages] = useState(3);
+  const [dialogCandidateId, setDialogCandidateId] = useState("");
   const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
   const [dialogStatus, setDialogStatus] = useState<string | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
+  const [hubRegistryStatus, setHubRegistryStatus] = useState<string | null>(null);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
@@ -981,22 +981,23 @@ function App() {
     try {
       const packs = await invoke<XPathRulePack[]>("fetch_registry_packs");
       setXPathRulePacks(packs);
-    } catch {
+      setHubRegistryStatus("Remote registry loaded.");
+    } catch (error) {
       const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
       setXPathRulePacks(packs);
+      setHubRegistryStatus(`Remote registry unavailable. Showing bundled packs. ${String(error)}`);
     }
   }
 
   function openPluginDialog(pack: XPathRulePack): void {
     const sections = pack.parameters?.sections;
-    const defaults = pack.parameters?.defaults;
     const firstSection = sections?.[0];
+    const firstCandidate = pack.candidates[0];
 
     setDialogUrl(firstSection?.url ?? "");
     setDialogSectionId(firstSection?.id ?? "");
     setDialogTitle(pack.name);
-    setDialogMaxItems(defaults?.maxItems ?? 20);
-    setDialogMaxPages(defaults?.maxPages ?? 3);
+    setDialogCandidateId(firstCandidate?.id ?? "");
     setDialogPreview(null);
     setDialogStatus(null);
     setShowPluginDialog(pack);
@@ -1010,7 +1011,9 @@ function App() {
 
   function dialogSelectors(): XPathSelectors | null {
     if (!showPluginDialog) return null;
-    const candidate = showPluginDialog.candidates[0];
+    const candidate =
+      showPluginDialog.candidates.find((item) => item.id === dialogCandidateId) ??
+      showPluginDialog.candidates[0];
     if (!candidate) return null;
     return candidate.selectors;
   }
@@ -1919,6 +1922,7 @@ function App() {
               </>
             )}
           </div>
+          {hubRegistryStatus ? <p className="hub-registry-status">{hubRegistryStatus}</p> : null}
 
           {officialPacks.length > 0 && (
             <section className="hub-section" aria-label="Featured plugins">
@@ -2070,32 +2074,26 @@ function App() {
                 </label>
               ) : null}
 
-              <label className="dialog-field">
-                <span>Max items: {dialogMaxItems}</span>
-                <input
-                  aria-label="Max items"
-                  disabled={isDialogBusy}
-                  max={100}
-                  min={5}
-                  onChange={(e) => setDialogMaxItems(Number(e.currentTarget.value))}
-                  step={5}
-                  type="range"
-                  value={dialogMaxItems}
-                />
-              </label>
-
-              <label className="dialog-field">
-                <span>Max pages: {dialogMaxPages}</span>
-                <input
-                  aria-label="Max pages"
-                  disabled={isDialogBusy}
-                  max={10}
-                  min={1}
-                  onChange={(e) => setDialogMaxPages(Number(e.currentTarget.value))}
-                  type="range"
-                  value={dialogMaxPages}
-                />
-              </label>
+              {showPluginDialog.candidates.length > 1 ? (
+                <label className="dialog-field">
+                  <span>Rule</span>
+                  <select
+                    aria-label="Plugin rule"
+                    disabled={isDialogBusy}
+                    onChange={(e) => {
+                      setDialogCandidateId(e.currentTarget.value);
+                      setDialogPreview(null);
+                    }}
+                    value={dialogCandidateId}
+                  >
+                    {showPluginDialog.candidates.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.pageType}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
 
               <label className="dialog-field">
                 <span>Source title</span>

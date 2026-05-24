@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::models::{env_reference_name, AiSettings, XPathSelectors, XPathSourceSuggestion};
+use crate::models::{
+    env_reference_name, AiSettings, XPathRulePack, XPathSelectors, XPathSourceSuggestion,
+};
 use crate::plugin_registry;
 use crate::xpath_adapter::is_valid_xpath;
 
@@ -96,8 +98,8 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
     })
 }
 
-fn build_prompt(html: &str) -> String {
-    let page_rules = page_type_rules(html);
+fn build_prompt(html: &str, rule_packs: &[XPathRulePack]) -> String {
+    let page_rules = page_type_rules(html, rule_packs);
     format!(
         "Generate XPath selectors for an article-listing page from the normalized XHTML below.\n\
          You must return exactly one JSON object and nothing else.\n\
@@ -118,7 +120,7 @@ fn build_prompt(html: &str) -> String {
     )
 }
 
-fn page_type_rules(html: &str) -> String {
+fn page_type_rules(html: &str, rule_packs: &[XPathRulePack]) -> String {
     let lower = html.to_ascii_lowercase();
     let mut rules = Vec::new();
 
@@ -128,7 +130,9 @@ fn page_type_rules(html: &str) -> String {
     {
         rules.push("- Detected anti-bot/challenge markup. Do not infer content selectors from this page; return empty XPath strings.".to_string());
     }
-    rules.extend(plugin_registry::matching_prompt_rules(html));
+    rules.extend(plugin_registry::matching_prompt_rules_in_packs(
+        html, rule_packs,
+    ));
     if lower.contains("book") || lower.contains("novel") || lower.contains("/c/") {
         rules.push("- Novel/category pages: prefer repeated book cards/list rows, title/url from the book detail link, author from nearby author text/link, summary from the description paragraph, image from cover `img/@src`, and nextPage from rel/next or pagination next link.".to_string());
     }
@@ -141,6 +145,7 @@ pub async fn suggest_xpath_selectors(
     settings: &AiSettings,
     stored_api_key: &str,
     page_html: &str,
+    rule_packs: &[XPathRulePack],
 ) -> Result<XPathSourceSuggestion, String> {
     let base_url = settings.base_url.trim();
     if base_url.is_empty() {
@@ -152,7 +157,7 @@ pub async fn suggest_xpath_selectors(
 
     let key = resolve_api_key(stored_api_key)?;
     let html: String = page_html.chars().take(AI_HTML_CHAR_CAP).collect();
-    let prompt = build_prompt(&html);
+    let prompt = build_prompt(&html, rule_packs);
 
     let text = match settings.provider.as_str() {
         "anthropic" => call_anthropic(settings, &key, &prompt).await?,
@@ -370,6 +375,7 @@ mod tests {
     fn prompt_includes_page_specific_rules() {
         let prompt = build_prompt(
             r#"<html><body><ul id="threadlisttableid"><li class="kmlist"><span class="km_subject">A</span></li></ul></body></html>"#,
+            &plugin_registry::bundled_xpath_rule_packs(),
         );
         assert!(prompt.contains("Discuz/forum thread list"));
         assert!(prompt.contains("threadlisttableid"));

@@ -117,6 +117,10 @@ const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 async fn fetch_registry_packs(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<XPathRulePack>, String> {
+    load_registry_packs(&database).await
+}
+
+async fn load_registry_packs(database: &AppDatabase) -> Result<Vec<XPathRulePack>, String> {
     let registry_json = match database.get_cache("registry_index", REGISTRY_CACHE_TTL_SECONDS)? {
         Some(cached) => cached,
         None => {
@@ -139,7 +143,12 @@ async fn fetch_registry_packs(
             continue;
         }
 
-        let cache_key = format!("plugin_pack_{}", entry.id);
+        let cache_key = format!(
+            "plugin_pack_{}_{}_{}",
+            entry.id,
+            entry.version,
+            entry.sha256.as_deref().unwrap_or("nosha")
+        );
         let pack_json = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
             Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
             None => None,
@@ -148,7 +157,7 @@ async fn fetch_registry_packs(
         if let Some(pack) = pack_json {
             all_packs.push(pack);
         } else {
-            match plugin_registry::fetch_remote_plugin_pack(&entry.manifest).await {
+            match plugin_registry::fetch_remote_plugin_pack(&entry).await {
                 Ok(pack) => {
                     if let Ok(json) = serde_json::to_string(&pack) {
                         let _ = database.set_cache(&cache_key, &json);
@@ -188,9 +197,17 @@ async fn suggest_xpath_source(
                 .to_string(),
         );
     }
-    let mut suggestion = ai::suggest_xpath_selectors(&settings, &raw_key, &html).await?;
-    suggestion.selectors =
-        xpath_adapter::select_best_xpath_selectors_for_preview(url, &html, &suggestion.selectors);
+    let rule_packs = load_registry_packs(&database)
+        .await
+        .unwrap_or_else(|_| plugin_registry::bundled_xpath_rule_packs());
+    let mut suggestion =
+        ai::suggest_xpath_selectors(&settings, &raw_key, &html, &rule_packs).await?;
+    suggestion.selectors = xpath_adapter::select_best_xpath_selectors_for_preview_with_packs(
+        url,
+        &html,
+        &suggestion.selectors,
+        &rule_packs,
+    );
     Ok(suggestion)
 }
 

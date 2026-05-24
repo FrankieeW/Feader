@@ -4,35 +4,59 @@
 //! not executable, so provider support can move out to FeaderHub before Feader
 //! needs a full sandboxed plugin runtime.
 
-use crate::models::{RemotePluginManifest, RemoteXPathRulePack, RegistryIndex, XPathRuleCandidate, XPathRulePack, XPathSelectors};
+use std::time::Duration;
+
+use sha2::{Digest, Sha256};
+
+use crate::models::{
+    RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteXPathRulePack,
+    XPathRuleCandidate, XPathRulePack, XPathSelectors,
+};
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
 const REGISTRY_RAW_BASE: &str = "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main";
+const STATIC_XPATH_KIND: &str = "static-xpath-rule-pack";
+const REGISTRY_FETCH_TIMEOUT_SECONDS: u64 = 15;
+const REGISTRY_INDEX_BYTE_CAP: usize = 128 * 1024;
+const PLUGIN_FILE_BYTE_CAP: usize = 256 * 1024;
 
 pub fn bundled_xpath_rule_packs() -> Vec<XPathRulePack> {
     vec![discuz_rule_pack(), maccms_rule_pack(), generic_rule_pack()]
 }
 
+#[cfg(test)]
 pub fn matching_prompt_rules(document: &str) -> Vec<String> {
-    bundled_xpath_rule_packs()
-        .into_iter()
-        .flat_map(|pack| pack.candidates)
+    matching_prompt_rules_in_packs(document, &bundled_xpath_rule_packs())
+}
+
+pub fn matching_prompt_rules_in_packs(document: &str, packs: &[XPathRulePack]) -> Vec<String> {
+    packs
+        .iter()
+        .flat_map(|pack| pack.candidates.iter())
         .filter(|candidate| candidate_matches(document, candidate))
-        .map(|candidate| candidate.prompt_rule)
+        .map(|candidate| candidate.prompt_rule.clone())
         .collect()
 }
 
+#[cfg(test)]
 pub fn matching_selector_candidates(document: &str) -> Vec<XPathSelectors> {
-    let mut candidates = bundled_xpath_rule_packs()
-        .into_iter()
-        .flat_map(|pack| pack.candidates)
+    matching_selector_candidates_in_packs(document, &bundled_xpath_rule_packs())
+}
+
+pub fn matching_selector_candidates_in_packs(
+    document: &str,
+    packs: &[XPathRulePack],
+) -> Vec<XPathSelectors> {
+    let mut candidates = packs
+        .iter()
+        .flat_map(|pack| pack.candidates.iter())
         .filter(|candidate| candidate_matches(document, candidate))
         .collect::<Vec<_>>();
     candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.priority));
     candidates
         .into_iter()
-        .map(|candidate| candidate.selectors)
+        .map(|candidate| candidate.selectors.clone())
         .collect()
 }
 
@@ -50,87 +74,59 @@ fn candidate_matches(document: &str, candidate: &XPathRuleCandidate) -> bool {
 /// Fetch the registry index from the remote FeaderHub repository.
 pub async fn fetch_registry_index() -> Result<RegistryIndex, String> {
     let url = format!("{REGISTRY_RAW_BASE}/registry/index.json");
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("User-Agent", "Feader/0.1")
-        .send()
-        .await
-        .map_err(|error| format!("Failed to fetch registry index: {error}"))?;
+    let body = fetch_text_limited(&url, REGISTRY_INDEX_BYTE_CAP, "registry index").await?;
 
-    if !response.status().is_success() {
+    let index = serde_json::from_str::<RegistryIndex>(&body)
+        .map_err(|error| format!("Failed to parse registry index: {error}"))?;
+    if index.schema_version != "feader-registry/v1" {
         return Err(format!(
-            "Registry index returned HTTP {}",
-            response.status()
+            "Unsupported registry schema '{}'",
+            index.schema_version
         ));
     }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Failed to read registry index body: {error}"))?;
-
-    serde_json::from_str::<RegistryIndex>(&body)
-        .map_err(|error| format!("Failed to parse registry index: {error}"))
+    Ok(index)
 }
 
 /// Fetch a single remote plugin manifest and its rule pack, returning a merged XPathRulePack.
-pub async fn fetch_remote_plugin_pack(manifest_path: &str) -> Result<XPathRulePack, String> {
-    let manifest_url = format!("{REGISTRY_RAW_BASE}/{manifest_path}");
-    let client = reqwest::Client::new();
-
-    // Fetch manifest
-    let manifest_response = client
-        .get(&manifest_url)
-        .header("User-Agent", "Feader/0.1")
-        .send()
-        .await
-        .map_err(|error| format!("Failed to fetch manifest {manifest_path}: {error}"))?;
-
-    if !manifest_response.status().is_success() {
+pub async fn fetch_remote_plugin_pack(
+    entry: &RegistryPluginEntry,
+) -> Result<XPathRulePack, String> {
+    if entry.kind != STATIC_XPATH_KIND {
         return Err(format!(
-            "Manifest {manifest_path} returned HTTP {}",
-            manifest_response.status()
+            "Plugin {} has unsupported kind '{}'",
+            entry.id, entry.kind
         ));
     }
+    let expected_sha = entry
+        .sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .ok_or_else(|| format!("Plugin {} has no valid sha256", entry.id))?;
 
-    let manifest_body = manifest_response
-        .text()
-        .await
-        .map_err(|error| format!("Failed to read manifest body: {error}"))?;
+    let manifest_path = validate_registry_path(&entry.manifest, "manifest")?;
+    let manifest_url = format!("{REGISTRY_RAW_BASE}/{manifest_path}");
+
+    let manifest_body =
+        fetch_text_limited(&manifest_url, PLUGIN_FILE_BYTE_CAP, "plugin manifest").await?;
 
     let manifest: RemotePluginManifest = serde_json::from_str(&manifest_body)
         .map_err(|error| format!("Failed to parse manifest {manifest_path}: {error}"))?;
+    validate_manifest(entry, &manifest)?;
 
-    // Fetch the rule pack (entry file, relative to manifest directory)
     let pack_dir = manifest_path
         .rsplit_once('/')
         .map(|(dir, _)| dir)
         .unwrap_or("");
-    let pack_url = format!("{REGISTRY_RAW_BASE}/{pack_dir}/{}", manifest.entry);
+    let entry_file = validate_registry_path(&manifest.entry, "rule pack entry")?;
+    let pack_url = format!("{REGISTRY_RAW_BASE}/{pack_dir}/{entry_file}");
 
-    let pack_response = client
-        .get(&pack_url)
-        .header("User-Agent", "Feader/0.1")
-        .send()
-        .await
-        .map_err(|error| format!("Failed to fetch rule pack {}: {error}", manifest.entry))?;
-
-    if !pack_response.status().is_success() {
-        return Err(format!(
-            "Rule pack {} returned HTTP {}",
-            manifest.entry,
-            pack_response.status()
-        ));
-    }
-
-    let pack_body = pack_response
-        .text()
-        .await
-        .map_err(|error| format!("Failed to read rule pack body: {error}"))?;
+    let pack_body = fetch_text_limited(&pack_url, PLUGIN_FILE_BYTE_CAP, "rule pack").await?;
+    verify_sha256(&pack_body, expected_sha, &entry.id)?;
 
     let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body)
         .map_err(|error| format!("Failed to parse rule pack {}: {error}", manifest.entry))?;
+    validate_rule_pack(entry, &manifest, &pack)?;
 
     Ok(XPathRulePack {
         id: pack.id,
@@ -139,7 +135,10 @@ pub async fn fetch_remote_plugin_pack(manifest_path: &str) -> Result<XPathRulePa
         api_version: manifest.feader_api_version,
         registry: OFFICIAL_REGISTRY.to_string(),
         trust: "official".to_string(),
-        description: pack.description.unwrap_or_default(),
+        description: pack
+            .description
+            .or(manifest.description)
+            .unwrap_or_default(),
         capabilities: vec![
             "xpath.selectorCandidates".to_string(),
             "ai.promptRules".to_string(),
@@ -147,6 +146,118 @@ pub async fn fetch_remote_plugin_pack(manifest_path: &str) -> Result<XPathRulePa
         candidates: pack.candidates,
         parameters: pack.parameters,
     })
+}
+
+async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(REGISTRY_FETCH_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(url)
+        .header("User-Agent", "Feader/0.1")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to fetch {label}: {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("{label} returned HTTP {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("Failed to read {label} body: {error}"))?;
+    if bytes.len() > cap {
+        return Err(format!("{label} exceeded {} bytes", cap));
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|error| format!("{label} was not UTF-8: {error}"))
+}
+
+fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('/')
+        || trimmed.contains("://")
+        || trimmed.split('/').any(|part| part == "..")
+    {
+        return Err(format!("Invalid {label} path '{path}'"));
+    }
+    Ok(trimmed)
+}
+
+fn validate_manifest(
+    entry: &RegistryPluginEntry,
+    manifest: &RemotePluginManifest,
+) -> Result<(), String> {
+    if manifest.id != entry.id {
+        return Err(format!(
+            "Manifest id '{}' does not match registry id '{}'",
+            manifest.id, entry.id
+        ));
+    }
+    if manifest.version != entry.version {
+        return Err(format!(
+            "Manifest version '{}' does not match registry version '{}'",
+            manifest.version, entry.version
+        ));
+    }
+    if manifest.name != entry.name {
+        return Err(format!(
+            "Manifest name '{}' does not match registry name '{}'",
+            manifest.name, entry.name
+        ));
+    }
+    if manifest.kind != STATIC_XPATH_KIND {
+        return Err(format!(
+            "Manifest kind '{}' is not supported",
+            manifest.kind
+        ));
+    }
+    if manifest.feader_api_version != STATIC_XPATH_API_VERSION {
+        return Err(format!(
+            "Manifest API version '{}' is not supported",
+            manifest.feader_api_version
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rule_pack(
+    entry: &RegistryPluginEntry,
+    manifest: &RemotePluginManifest,
+    pack: &RemoteXPathRulePack,
+) -> Result<(), String> {
+    if pack.schema_version != STATIC_XPATH_API_VERSION {
+        return Err(format!(
+            "Rule pack schema '{}' is not supported",
+            pack.schema_version
+        ));
+    }
+    if pack.id != manifest.id || pack.id != entry.id {
+        return Err(format!(
+            "Rule pack id '{}' does not match manifest",
+            pack.id
+        ));
+    }
+    if pack.version != manifest.version {
+        return Err(format!(
+            "Rule pack version '{}' does not match manifest version '{}'",
+            pack.version, manifest.version
+        ));
+    }
+    Ok(())
+}
+
+fn verify_sha256(body: &str, expected: &str, plugin_id: &str) -> Result<(), String> {
+    let digest = Sha256::digest(body.as_bytes());
+    let actual = hex::encode(digest);
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "Plugin {plugin_id} checksum mismatch: expected {expected}, got {actual}"
+        ));
+    }
+    Ok(())
 }
 
 fn rule_pack(

@@ -1008,6 +1008,13 @@ input:disabled {
   color: var(--color-border);
 }
 
+.hub-registry-status {
+  margin: -8px 0 18px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* Sections */
 
 .hub-section {

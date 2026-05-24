@@ -266,12 +266,7 @@ impl AppDatabase {
             .query_row(
                 "SELECT value, fetched_at FROM registry_cache WHERE key = ?1",
                 params![key],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()
             .map_err(|error| error.to_string())?;
@@ -280,8 +275,8 @@ impl AppDatabase {
             return Ok(None);
         };
 
-        let fetched = chrono::DateTime::parse_from_rfc3339(&fetched_at)
-            .map_err(|error| error.to_string())?;
+        let fetched =
+            chrono::DateTime::parse_from_rfc3339(&fetched_at).map_err(|error| error.to_string())?;
         let age = Utc::now() - fetched.with_timezone(&Utc);
         if age.num_seconds() > max_age_seconds {
             return Ok(None);

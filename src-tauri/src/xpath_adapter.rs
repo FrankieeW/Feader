@@ -8,7 +8,7 @@ use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
 use crate::models::{
-    ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathSelectors,
+    ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathRulePack, XPathSelectors,
 };
 use crate::plugin_registry;
 
@@ -505,16 +505,31 @@ pub fn preview_xpath_document(
 /// are absolute to the document instead of relative to each item. The adapter extracts
 /// fields from each item node, so validate against the same normalized document and
 /// repair required fields with conservative relative candidates.
+#[cfg(test)]
 pub fn select_best_xpath_selectors_for_preview(
     base_url: &str,
     document: &str,
     selectors: &XPathSelectors,
 ) -> XPathSelectors {
+    select_best_xpath_selectors_for_preview_with_packs(
+        base_url,
+        document,
+        selectors,
+        &plugin_registry::bundled_xpath_rule_packs(),
+    )
+}
+
+pub fn select_best_xpath_selectors_for_preview_with_packs(
+    base_url: &str,
+    document: &str,
+    selectors: &XPathSelectors,
+    rule_packs: &[XPathRulePack],
+) -> XPathSelectors {
     let mut candidates = vec![repair_required_selectors_for_preview(
         base_url, document, selectors,
     )];
     candidates.extend(
-        known_selector_candidates(document)
+        known_selector_candidates(document, rule_packs)
             .into_iter()
             .map(|candidate| repair_required_selectors_for_preview(base_url, document, &candidate)),
     );
@@ -581,8 +596,8 @@ fn repair_required_selectors_for_preview(
     improved
 }
 
-fn known_selector_candidates(document: &str) -> Vec<XPathSelectors> {
-    plugin_registry::matching_selector_candidates(document)
+fn known_selector_candidates(document: &str, rule_packs: &[XPathRulePack]) -> Vec<XPathSelectors> {
+    plugin_registry::matching_selector_candidates_in_packs(document, rule_packs)
 }
 
 fn preview_selector_score(base_url: &str, document: &str, selectors: &XPathSelectors) -> usize {
