@@ -17,6 +17,8 @@ const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
 const REGISTRY_RAW_BASE: &str = "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main";
 const STATIC_XPATH_KIND: &str = "static-xpath-rule-pack";
+const JSON_API_FEED_KIND: &str = "json-api-feed";
+const JSON_API_FEED_API_VERSION: &str = "json-api-feed/v1";
 const REGISTRY_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const REGISTRY_INDEX_BYTE_CAP: usize = 128 * 1024;
 const PLUGIN_FILE_BYTE_CAP: usize = 256 * 1024;
@@ -91,7 +93,9 @@ pub async fn fetch_registry_index() -> Result<RegistryIndex, String> {
 pub async fn fetch_remote_plugin_pack(
     entry: &RegistryPluginEntry,
 ) -> Result<XPathRulePack, String> {
-    if entry.kind != STATIC_XPATH_KIND {
+    let is_xpath = entry.kind == STATIC_XPATH_KIND;
+    let is_json = entry.kind == JSON_API_FEED_KIND;
+    if !is_xpath && !is_json {
         return Err(format!(
             "Plugin {} has unsupported kind '{}'",
             entry.id, entry.kind
@@ -208,13 +212,20 @@ fn validate_manifest(
             manifest.name, entry.name
         ));
     }
-    if manifest.kind != STATIC_XPATH_KIND {
+    let is_xpath = manifest.kind == STATIC_XPATH_KIND;
+    let is_json = manifest.kind == JSON_API_FEED_KIND;
+    if !is_xpath && !is_json {
         return Err(format!(
             "Manifest kind '{}' is not supported",
             manifest.kind
         ));
     }
-    if manifest.feader_api_version != STATIC_XPATH_API_VERSION {
+    let expected_api_version = if is_json {
+        JSON_API_FEED_API_VERSION
+    } else {
+        STATIC_XPATH_API_VERSION
+    };
+    if manifest.feader_api_version != expected_api_version {
         return Err(format!(
             "Manifest API version '{}' is not supported",
             manifest.feader_api_version
