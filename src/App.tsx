@@ -1303,21 +1303,30 @@ function App() {
     if (!confirmed) {
       return;
     }
+    const remainingSources = sources.filter((source) => source.id !== sourceId);
+    const nextManagerSourceId = remainingSources[0]?.id;
+    const nextReaderSourceId = selectedSourceId === sourceId ? undefined : selectedSourceId;
+    const nextArticleId = selectedSourceId === sourceId ? undefined : selectedArticleId;
+
     await runTask("Deleting feed", async () => {
       await invoke("delete_source", { sourceId });
-      if (selectedManagerSourceId === sourceId) {
-        setSelectedManagerSourceId(undefined);
-      }
+      setSources(remainingSources);
+      setArticles((current) =>
+        selectedSourceId === sourceId
+          ? []
+          : current.filter((article) => article.sourceId !== sourceId),
+      );
+      setSelectedManagerSourceId(nextManagerSourceId);
       if (editingXPathSourceId === sourceId) {
         setEditingXPathSourceId(null);
+        setEditXPathPreview(null);
+        setEditXPathStatus(null);
       }
       if (selectedSourceId === sourceId) {
         setSelectedSourceId(undefined);
         setSelectedArticleId(undefined);
-        await loadData(undefined, filterMode, undefined);
-      } else {
-        await loadData(selectedSourceId, filterMode, selectedArticleId);
       }
+      await loadData(nextReaderSourceId, filterMode, nextArticleId);
       setStatus("Feed deleted");
     });
   }

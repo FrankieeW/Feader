@@ -442,9 +442,12 @@ impl AppDatabase {
     /// Delete a source and its articles.
     pub fn delete_source(&self, source_id: i64) -> Result<(), String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
-        connection
+        let deleted = connection
             .execute("DELETE FROM sources WHERE id = ?1", [source_id])
             .map_err(|error| error.to_string())?;
+        if deleted == 0 {
+            return Err(format!("Source {source_id} was not found"));
+        }
         Ok(())
     }
 
