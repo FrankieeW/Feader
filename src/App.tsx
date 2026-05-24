@@ -75,6 +75,9 @@ type ViewMode = "reader" | "sources" | "hub" | "settings";
 type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
+type AppUiPluginId = "editorial" | "terminal" | "calm";
+type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
+type DetailViewPluginId = "magazine" | "focus" | "research";
 type PaneKey = "sidebar" | "timeline";
 type ReaderVideo =
   | {
@@ -375,6 +378,13 @@ type WalletSession = {
   expiresAt?: string | null;
 };
 
+type ViewPluginDefinition<T extends string> = {
+  id: T;
+  name: string;
+  description: string;
+  capability: string;
+};
+
 const defaultXPathSelectors: XPathSelectors = {
   items: "//article",
   title: ".//h2/a/text()",
@@ -432,6 +442,9 @@ const xpathPresets: Record<string, XPathSelectors> = {
 
 const themeStorageKey = "feader.theme";
 const entryLayoutStorageKey = "feader.entryLayout";
+const appUiPluginStorageKey = "feader.plugin.appUi";
+const sourceListPluginStorageKey = "feader.plugin.sourceList";
+const detailViewPluginStorageKey = "feader.plugin.detailView";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
 const feedGroupStorageKey = "feader.feedGroups";
@@ -446,6 +459,69 @@ const paneBounds: Record<PaneKey, { min: number; max: number }> = {
   sidebar: { min: 220, max: 300 },
   timeline: { min: 360, max: 620 },
 };
+
+const appUiPlugins: ViewPluginDefinition<AppUiPluginId>[] = [
+  {
+    id: "editorial",
+    name: "Editorial Desk",
+    description: "Warmer panels, stronger masthead contrast, and print-desk rhythm across the app.",
+    capability: "app.theme",
+  },
+  {
+    id: "terminal",
+    name: "Terminal Ops",
+    description: "A dark operational shell with high-contrast surfaces for long source triage sessions.",
+    capability: "app.theme",
+  },
+  {
+    id: "calm",
+    name: "Calm Glass",
+    description: "Soft blue-green chrome and lighter panels for a quieter daily reading workspace.",
+    capability: "app.theme",
+  },
+];
+
+const sourceListPlugins: ViewPluginDefinition<SourceListPluginId>[] = [
+  {
+    id: "image-board",
+    name: "Image Board",
+    description: "Turns the source article queue into thumbnail-led cards for visual feeds.",
+    capability: "sourceList.view",
+  },
+  {
+    id: "social-stream",
+    name: "Social Stream",
+    description: "Adds avatar-like source marks and post-style spacing for social media feeds.",
+    capability: "sourceList.view",
+  },
+  {
+    id: "dense-radar",
+    name: "Dense Radar",
+    description: "Compacts the queue for fast scanning of many short updates.",
+    capability: "sourceList.view",
+  },
+];
+
+const detailViewPlugins: ViewPluginDefinition<DetailViewPluginId>[] = [
+  {
+    id: "magazine",
+    name: "Magazine",
+    description: "Uses larger art, wider titles, and editorial spacing for feature-style reading.",
+    capability: "detail.view",
+  },
+  {
+    id: "focus",
+    name: "Focus",
+    description: "Dims metadata and narrows the body for distraction-light long-form reading.",
+    capability: "detail.view",
+  },
+  {
+    id: "research",
+    name: "Research",
+    description: "Keeps metadata prominent and body blocks structured for reference-heavy articles.",
+    capability: "detail.view",
+  },
+];
 
 const defaultAiSettings: AiSettings = {
   provider: "openai",
@@ -1263,6 +1339,15 @@ function App() {
   const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
   const [entryLayout, setEntryLayout] = useState<EntryLayout>(() => readInitialEntryLayout());
+  const [appUiPlugin, setAppUiPlugin] = useState<AppUiPluginId | null>(() =>
+    readInitialPluginId(appUiPluginStorageKey, appUiPlugins),
+  );
+  const [sourceListPlugin, setSourceListPlugin] = useState<SourceListPluginId | null>(() =>
+    readInitialPluginId(sourceListPluginStorageKey, sourceListPlugins),
+  );
+  const [detailViewPlugin, setDetailViewPlugin] = useState<DetailViewPluginId | null>(() =>
+    readInitialPluginId(detailViewPluginStorageKey, detailViewPlugins),
+  );
   const [readerTypography, setReaderTypography] = useState<ReaderTypography>(() =>
     readInitialReaderTypography(),
   );
@@ -1380,6 +1465,19 @@ function App() {
   useEffect(() => {
     localStorage.setItem(entryLayoutStorageKey, entryLayout);
   }, [entryLayout]);
+
+  useEffect(() => {
+    persistNullablePlugin(appUiPluginStorageKey, appUiPlugin);
+    applyAppUiPlugin(appUiPlugin);
+  }, [appUiPlugin]);
+
+  useEffect(() => {
+    persistNullablePlugin(sourceListPluginStorageKey, sourceListPlugin);
+  }, [sourceListPlugin]);
+
+  useEffect(() => {
+    persistNullablePlugin(detailViewPluginStorageKey, detailViewPlugin);
+  }, [detailViewPlugin]);
 
   useEffect(() => {
     localStorage.setItem(readerTypographyStorageKey, readerTypography);
@@ -2136,8 +2234,14 @@ function App() {
   function handleResetWorkspaceLayout(): void {
     setPaneWidths(defaultPaneWidths);
     setEntryLayout("list");
+    setAppUiPlugin(null);
+    setSourceListPlugin(null);
+    setDetailViewPlugin(null);
     localStorage.removeItem(paneStorageKey);
     localStorage.removeItem(entryLayoutStorageKey);
+    localStorage.removeItem(appUiPluginStorageKey);
+    localStorage.removeItem(sourceListPluginStorageKey);
+    localStorage.removeItem(detailViewPluginStorageKey);
   }
 
   async function handleToggleAutoRefresh(enabled: boolean): Promise<void> {
@@ -2222,10 +2326,13 @@ function App() {
     "--sidebar-width": `${paneWidths.sidebar}px`,
     "--timeline-width": `${paneWidths.timeline}px`,
   } as CSSProperties;
+  const effectiveSourceListView = sourceListPlugin ?? entryLayout;
+  const activePluginCount = [appUiPlugin, sourceListPlugin, detailViewPlugin].filter(Boolean).length;
 
   return (
     <main
       className="app-shell"
+      data-app-ui-plugin={appUiPlugin ?? "native"}
       data-view={activeView}
       style={shellStyle}
     >
@@ -2454,7 +2561,7 @@ function App() {
           <div className="status-line">{status}</div>
         </div>
 
-        <div className={`story-list ${entryLayout}`}>
+        <div className={`story-list ${entryLayout}`} data-source-list-plugin={effectiveSourceListView}>
           {articles.length === 0 ? (
             <section className="empty-state">
               <h2>No articles</h2>
@@ -2476,13 +2583,18 @@ function App() {
                 role="button"
                 tabIndex={0}
               >
-                {entryLayout === "card" ? (
+                {entryLayout === "card" || sourceListPlugin === "image-board" ? (
                   <div
                     className="story-thumb"
                     style={
                       article.imageUrl ? { backgroundImage: `url(${article.imageUrl})` } : undefined
                     }
                   />
+                ) : null}
+                {sourceListPlugin === "social-stream" ? (
+                  <span className="story-avatar" aria-hidden="true">
+                    {article.sourceTitle.charAt(0).toUpperCase()}
+                  </span>
                 ) : null}
                 <div className="story-state">
                   <span className={article.read ? "read-dot" : "unread-dot"} />
@@ -3251,6 +3363,16 @@ function App() {
               </dl>
             </article>
 
+            <PluginSwitchboard
+              activeCount={activePluginCount}
+              appUiPlugin={appUiPlugin}
+              detailViewPlugin={detailViewPlugin}
+              onAppUiPluginChange={setAppUiPlugin}
+              onDetailViewPluginChange={setDetailViewPlugin}
+              onSourceListPluginChange={setSourceListPlugin}
+              sourceListPlugin={sourceListPlugin}
+            />
+
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Auto Refresh</span>
@@ -3377,6 +3499,7 @@ function App() {
             </button>
             <ReaderArticle
               article={selectedArticle}
+              detailViewPlugin={detailViewPlugin}
               onToggleRead={(item) => void handleToggleRead(item)}
               onToggleSaved={(item) => void handleToggleSaved(item)}
               readerTypography={readerTypography}
@@ -3401,6 +3524,7 @@ function App() {
           <div className="immersive-body">
             <ReaderArticle
               article={selectedArticle}
+              detailViewPlugin={detailViewPlugin}
               onToggleRead={(item) => void handleToggleRead(item)}
               onToggleSaved={(item) => void handleToggleSaved(item)}
               readerTypography={readerTypography}
@@ -4317,13 +4441,105 @@ function ReaderTypographyControl({
   );
 }
 
+function PluginSwitchboard({
+  activeCount,
+  appUiPlugin,
+  detailViewPlugin,
+  onAppUiPluginChange,
+  onDetailViewPluginChange,
+  onSourceListPluginChange,
+  sourceListPlugin,
+}: {
+  activeCount: number;
+  appUiPlugin: AppUiPluginId | null;
+  detailViewPlugin: DetailViewPluginId | null;
+  onAppUiPluginChange: (plugin: AppUiPluginId | null) => void;
+  onDetailViewPluginChange: (plugin: DetailViewPluginId | null) => void;
+  onSourceListPluginChange: (plugin: SourceListPluginId | null) => void;
+  sourceListPlugin: SourceListPluginId | null;
+}) {
+  return (
+    <article className="settings-card plugin-switchboard">
+      <div className="panel-heading">
+        <span>View plugins</span>
+        <span>{activeCount} enabled</span>
+      </div>
+      <p className="plugin-switchboard-copy">
+        Built-in plugin slots for the app shell, source list, and article detail view. Disable a slot
+        to return to Feader native rendering.
+      </p>
+      <PluginSlot
+        activePlugin={appUiPlugin}
+        label="App UI theme"
+        onChange={onAppUiPluginChange}
+        plugins={appUiPlugins}
+      />
+      <PluginSlot
+        activePlugin={sourceListPlugin}
+        label="Source list view"
+        onChange={onSourceListPluginChange}
+        plugins={sourceListPlugins}
+      />
+      <PluginSlot
+        activePlugin={detailViewPlugin}
+        label="Detail content view"
+        onChange={onDetailViewPluginChange}
+        plugins={detailViewPlugins}
+      />
+    </article>
+  );
+}
+
+function PluginSlot<T extends string>({
+  activePlugin,
+  label,
+  onChange,
+  plugins,
+}: {
+  activePlugin: T | null;
+  label: string;
+  onChange: (plugin: T | null) => void;
+  plugins: ViewPluginDefinition<T>[];
+}) {
+  return (
+    <section className="plugin-slot" aria-label={label}>
+      <div className="plugin-slot-header">
+        <div>
+          <strong>{label}</strong>
+          <span>{activePlugin ? pluginName(activePlugin, plugins) : "Native Feader view"}</span>
+        </div>
+        <button disabled={!activePlugin} onClick={() => onChange(null)} type="button">
+          Disable
+        </button>
+      </div>
+      <div className="plugin-option-grid">
+        {plugins.map((plugin) => (
+          <button
+            aria-pressed={activePlugin === plugin.id}
+            className={`plugin-option ${activePlugin === plugin.id ? "active" : ""}`}
+            key={plugin.id}
+            onClick={() => onChange(activePlugin === plugin.id ? null : plugin.id)}
+            type="button"
+          >
+            <span>{plugin.name}</span>
+            <em>{plugin.capability}</em>
+            <small>{plugin.description}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ReaderArticle({
   article,
+  detailViewPlugin,
   readerTypography,
   onToggleRead,
   onToggleSaved,
 }: {
   article: Article;
+  detailViewPlugin: DetailViewPluginId | null;
   readerTypography: ReaderTypography;
   onToggleRead: (article: Article) => void;
   onToggleSaved: (article: Article) => void;
@@ -4338,7 +4554,11 @@ function ReaderArticle({
   );
 
   return (
-    <article className="reader-article" data-typography={readerTypography}>
+    <article
+      className="reader-article"
+      data-detail-view-plugin={detailViewPlugin ?? "native"}
+      data-typography={readerTypography}
+    >
       <div className="reader-kicker">
         <span>{article.sourceTitle}</span>
         <span>{formatDate(article.publishedAt ?? article.createdAt)}</span>
@@ -4529,6 +4749,13 @@ function readerTypographyLabel(mode: ReaderTypography): string {
   return "System";
 }
 
+function pluginName<T extends string>(
+  pluginId: T,
+  plugins: ViewPluginDefinition<T>[],
+): string {
+  return plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+}
+
 function readInitialThemeMode(): ThemeMode {
   const stored = localStorage.getItem(themeStorageKey);
   if (stored === "light" || stored === "dark" || stored === "system") {
@@ -4543,6 +4770,17 @@ function readInitialEntryLayout(): EntryLayout {
     return stored;
   }
   return "list";
+}
+
+function readInitialPluginId<T extends string>(
+  storageKey: string,
+  plugins: ViewPluginDefinition<T>[],
+): T | null {
+  const stored = localStorage.getItem(storageKey);
+  if (plugins.some((plugin) => plugin.id === stored)) {
+    return stored as T;
+  }
+  return null;
 }
 
 function readInitialReaderTypography(): ReaderTypography {
@@ -4587,6 +4825,18 @@ function applyThemeMode(mode: ThemeMode): void {
       : mode;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = mode;
+}
+
+function applyAppUiPlugin(pluginId: AppUiPluginId | null): void {
+  document.documentElement.dataset.appUiPlugin = pluginId ?? "native";
+}
+
+function persistNullablePlugin(storageKey: string, pluginId: string | null): void {
+  if (pluginId) {
+    localStorage.setItem(storageKey, pluginId);
+    return;
+  }
+  localStorage.removeItem(storageKey);
 }
 
 function clamp(value: number, min: number, max: number): number {
