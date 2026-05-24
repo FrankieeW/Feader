@@ -14,10 +14,11 @@ use db::AppDatabase;
 use hex::FromHex;
 use models::{
     AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
-    CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, RegistryIndex, Source,
-    SourceRefreshResult, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
-    VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack,
-    XPathSelectors, XPathSourceSuggestion,
+    CreateWalletLoginChallengeRequest, CredentialCheck, PluginCredential,
+    PreviewXPathSourceRequest, RegistryIndex, Source, SourceRefreshResult,
+    UpdateSourceTitleRequest, UpdateXPathSourceRequest, VerifyWalletLoginRequest,
+    WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack, XPathSelectors,
+    XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use tauri::Manager;
@@ -101,6 +102,49 @@ fn set_ai_settings(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<AiSettings, String> {
     database.set_ai_settings(&input)
+}
+
+/// Read a plugin credential (cookie masked).
+#[tauri::command]
+fn get_plugin_credential(
+    plugin_id: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<PluginCredential, String> {
+    database.get_plugin_credential(&plugin_id)
+}
+
+/// Save (or clear, when blank) a plugin-level cookie.
+#[tauri::command]
+fn set_plugin_credential(
+    plugin_id: String,
+    cookie: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<PluginCredential, String> {
+    database.set_plugin_credential(&plugin_id, &cookie)?;
+    database.get_plugin_credential(&plugin_id)
+}
+
+/// Probe whether the stored cookie is still valid for a plugin.
+#[tauri::command]
+async fn check_plugin_credential(
+    plugin_id: String,
+    check_url: String,
+    logged_in_xpath: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<CredentialCheck, String> {
+    let cookie = database.raw_plugin_cookie(&plugin_id)?;
+    if cookie.is_none() {
+        return Err("尚未设置该插件的 cookie".to_string());
+    }
+    let (ok, message) =
+        xpath_adapter::check_login_state(check_url.trim(), cookie.as_deref(), logged_in_xpath.trim())
+            .await?;
+    database.record_plugin_credential_check(&plugin_id, ok, &message)?;
+    let checked_at = database
+        .get_plugin_credential(&plugin_id)?
+        .last_checked_at
+        .unwrap_or_default();
+    Ok(CredentialCheck { ok, message, checked_at })
 }
 
 /// Return bundled static XPath plugin packs.
@@ -515,6 +559,9 @@ pub fn run() {
             disconnect_wallet_login,
             get_ai_settings,
             set_ai_settings,
+            get_plugin_credential,
+            set_plugin_credential,
+            check_plugin_credential,
             list_xpath_plugin_packs,
             fetch_registry_packs,
             suggest_xpath_source,

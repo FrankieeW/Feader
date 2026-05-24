@@ -359,6 +359,42 @@ pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) 
     pick(source_cookie).or_else(|| pick(plugin_cookie))
 }
 
+/// True when `logged_in_xpath` matches at least one node in `document`.
+pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool, String> {
+    let normalized = normalize_html_document(document)?;
+    let package = parser::parse(&normalized).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let root = Node::Root(package.as_document().root());
+    let xpath = compile_xpath(logged_in_xpath)?;
+    let context = Context::new();
+    match xpath.evaluate(&context, root).map_err(|error| error.to_string())? {
+        Value::Nodeset(nodes) => Ok(!nodes.document_order().is_empty()),
+        Value::Boolean(value) => Ok(value),
+        Value::String(value) => Ok(!value.is_empty()),
+        Value::Number(value) => Ok(value != 0.0),
+    }
+}
+
+/// Fetch `check_url` with the given cookie and report whether the login marker is present.
+pub async fn check_login_state(
+    check_url: &str,
+    cookie: Option<&str>,
+    logged_in_xpath: &str,
+) -> Result<(bool, String), String> {
+    let mut selectors = XPathSelectors::default();
+    selectors.cookie = cookie.map(str::to_string);
+    let body = fetch_page(check_url, &selectors).await?;
+    if looks_like_interstitial_document(&body) {
+        return Ok((false, "返回了反爬/浏览器校验页,无法确认登录态".to_string()));
+    }
+    match evaluate_logged_in(&body, logged_in_xpath) {
+        Ok(true) => Ok((true, "cookie 有效,已登录".to_string())),
+        Ok(false) => Ok((false, "cookie 失效或已过期(未检测到登录标志)".to_string())),
+        Err(error) => Ok((false, format!("校验失败: {error}"))),
+    }
+}
+
 /// Extract articles from a static HTML/XML document string.
 pub fn parse_xpath_source(
     base_url: &str,
@@ -1329,6 +1365,15 @@ mod tests {
         // none
         assert_eq!(resolve_cookie(None, None), None);
         assert_eq!(resolve_cookie(Some(""), None), None);
+    }
+
+    #[test]
+    fn evaluates_logged_in_marker() {
+        let logged_in = r#"<html><body><a href="member.php?action=logout">退出</a></body></html>"#;
+        let logged_out = r#"<html><body><a href="member.php?action=login">登录</a></body></html>"#;
+        let xpath = "//a[contains(@href,'logout') or contains(@href,'action=logout')]";
+        assert!(evaluate_logged_in(logged_in, xpath).unwrap());
+        assert!(!evaluate_logged_in(logged_out, xpath).unwrap());
     }
 
     #[test]
