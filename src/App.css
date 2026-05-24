@@ -775,6 +775,7 @@ input:disabled {
 
 .page-panel,
 .source-card,
+.hub-card,
 .settings-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -787,6 +788,7 @@ input:disabled {
 }
 
 .source-grid,
+.hub-grid,
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(280px, 1fr));
@@ -794,10 +796,64 @@ input:disabled {
 }
 
 .source-card,
+.hub-card,
 .settings-card {
   display: grid;
   gap: 12px;
   padding: 16px;
+}
+
+.hub-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.hub-overview article {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: var(--color-panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.hub-overview strong {
+  color: var(--color-heading);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.hub-overview span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.hub-card p {
+  margin: 0;
+  color: var(--color-muted);
+  line-height: 1.45;
+}
+
+.capability-list,
+.rule-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.capability-list span,
+.rule-list span {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--color-muted);
+  background: var(--color-panel-soft);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .source-health-strip {
@@ -899,6 +955,7 @@ input:disabled {
 }
 
 .source-card dl,
+.hub-card dl,
 .settings-card dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -907,6 +964,7 @@ input:disabled {
 }
 
 .source-card dt,
+.hub-card dt,
 .settings-card dt {
   color: var(--color-heading);
   font-size: 12px;
@@ -915,6 +973,7 @@ input:disabled {
 }
 
 .source-card dd,
+.hub-card dd,
 .settings-card dd {
   margin: 0;
   color: var(--color-muted);
@@ -1598,7 +1657,12 @@ input:focus-visible,
   }
 
   .source-grid,
+  .hub-grid,
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hub-overview {
     grid-template-columns: 1fr;
   }
 }

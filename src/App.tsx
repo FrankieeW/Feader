@@ -70,7 +70,7 @@ type SourceRefreshResult = {
 type FilterMode = "all" | "unread" | "saved";
 type SourceInputMode = "rss" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
-type ViewMode = "reader" | "sources" | "settings";
+type ViewMode = "reader" | "sources" | "hub" | "settings";
 type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
@@ -96,6 +96,27 @@ type XPathSelectors = {
 type XPathSourceSuggestion = {
   title?: string | null;
   selectors: XPathSelectors;
+};
+
+type XPathRuleCandidate = {
+  id: string;
+  pageType: string;
+  priority: number;
+  detect: string[];
+  promptRule: string;
+  selectors: XPathSelectors;
+};
+
+type XPathRulePack = {
+  id: string;
+  name: string;
+  version: string;
+  apiVersion: string;
+  registry: string;
+  trust: string;
+  description: string;
+  capabilities: string[];
+  candidates: XPathRuleCandidate[];
 };
 
 type ParsedArticle = {
@@ -328,6 +349,76 @@ const testModeArticles: Article[] = [
 let testModeSourceState = testModeSources.map((source) => ({ ...source }));
 let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
 let testModeAiSettings: AiSettings = { ...defaultAiSettings };
+const testModeXPathRulePacks: XPathRulePack[] = [
+  {
+    id: "official.discuz.xpath",
+    name: "Discuz XPath Rules",
+    version: "0.1.0",
+    apiVersion: "xpath-rule-pack/v1",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "bundled-official",
+    description: "Static XPath and AI prompt rules for Discuz-style forum thread lists.",
+    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
+    candidates: [
+      {
+        id: "discuz-thread-list",
+        pageType: "forum-thread-list",
+        priority: 90,
+        detect: ["threadlisttableid", "km_subject", "discuz"],
+        promptRule: "Discuz/forum thread list",
+        selectors: defaultXPathSelectors,
+      },
+    ],
+  },
+  {
+    id: "official.maccms.xpath",
+    name: "MacCMS XPath Rules",
+    version: "0.1.0",
+    apiVersion: "xpath-rule-pack/v1",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "bundled-official",
+    description: "Static XPath and AI prompt rules for MacCMS video list and detail pages.",
+    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
+    candidates: [
+      {
+        id: "maccms-video-list",
+        pageType: "video-list",
+        priority: 80,
+        detect: ["vodlist_item", "maccms", "vod/detail"],
+        promptRule: "MacCMS/video listing",
+        selectors: defaultXPathSelectors,
+      },
+      {
+        id: "maccms-video-detail",
+        pageType: "video-detail",
+        priority: 85,
+        detect: ["detail_list_box", "btn_primary", "vodlist_thumb"],
+        promptRule: "MacCMS/video detail page",
+        selectors: defaultXPathSelectors,
+      },
+    ],
+  },
+  {
+    id: "official.generic-html.xpath",
+    name: "Generic HTML XPath Rules",
+    version: "0.1.0",
+    apiVersion: "xpath-rule-pack/v1",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "bundled-official",
+    description: "Fallback static XPath and AI prompt rules for generic article listings.",
+    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
+    candidates: [
+      {
+        id: "generic-article-list",
+        pageType: "article-list",
+        priority: 10,
+        detect: [],
+        promptRule: "Generic listing",
+        selectors: defaultXPathSelectors,
+      },
+    ],
+  },
+];
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauriRuntime()) {
@@ -436,6 +527,8 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       };
       return testModeAiSettings as T;
     }
+    case "list_xpath_plugin_packs":
+      return testModeXPathRulePacks as T;
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
       const sourceId = Number(request?.sourceId);
@@ -627,6 +720,7 @@ function App() {
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
   const [xpathStatus, setXPathStatus] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
+  const [xpathRulePacks, setXPathRulePacks] = useState<XPathRulePack[]>([]);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
@@ -658,6 +752,7 @@ function App() {
     void loadData();
     void loadWalletSession();
     void loadAiSettings();
+    void loadXPathPluginPacks();
   }, []);
 
   useEffect(() => {
@@ -725,6 +820,11 @@ function App() {
   async function loadAiSettings(): Promise<void> {
     const settings = await invoke<AiSettings>("get_ai_settings");
     setAiSettings(settings);
+  }
+
+  async function loadXPathPluginPacks(): Promise<void> {
+    const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
+    setXPathRulePacks(packs);
   }
 
   async function handleSaveAiSettings(input: {
@@ -1483,6 +1583,81 @@ function App() {
         </section>
       ) : null}
 
+      {activeView === "hub" ? (
+        <section className="page-view" aria-label="Hub">
+          <header className="page-header">
+            <div>
+              <p className="eyebrow">Hub</p>
+              <h1>Plugin hub</h1>
+            </div>
+            <a
+              className="secondary-action hub-link"
+              href="https://github.com/FrankieeW/FeaderHub"
+              rel="noreferrer"
+              target="_blank"
+            >
+              Open FeaderHub
+            </a>
+          </header>
+
+          <section className="hub-overview" aria-label="Hub summary">
+            <article>
+              <strong>{xpathRulePacks.length}</strong>
+              <span>Bundled packs</span>
+            </article>
+            <article>
+              <strong>{xpathRulePacks.reduce((total, pack) => total + pack.candidates.length, 0)}</strong>
+              <span>XPath candidates</span>
+            </article>
+            <article>
+              <strong>{new Set(xpathRulePacks.flatMap((pack) => pack.capabilities)).size}</strong>
+              <span>Capabilities</span>
+            </article>
+          </section>
+
+          <section className="hub-grid" aria-label="XPath plugin packs">
+            {xpathRulePacks.length === 0 ? (
+              <section className="empty-state">
+                <h2>No plugin packs</h2>
+                <p>Feader has not loaded any XPath rule packs yet.</p>
+              </section>
+            ) : (
+              xpathRulePacks.map((pack) => (
+                <article className="hub-card" key={pack.id}>
+                  <div className="panel-heading">
+                    <span>{pack.name}</span>
+                    <span>{pack.version}</span>
+                  </div>
+                  <p>{pack.description}</p>
+                  <dl>
+                    <dt>ID</dt>
+                    <dd>{pack.id}</dd>
+                    <dt>API</dt>
+                    <dd>{pack.apiVersion}</dd>
+                    <dt>Trust</dt>
+                    <dd>{pack.trust}</dd>
+                    <dt>Rules</dt>
+                    <dd>{pack.candidates.length}</dd>
+                  </dl>
+                  <div className="capability-list" aria-label={`${pack.name} capabilities`}>
+                    {pack.capabilities.map((capability) => (
+                      <span key={capability}>{capability}</span>
+                    ))}
+                  </div>
+                  <div className="rule-list" aria-label={`${pack.name} rule candidates`}>
+                    {pack.candidates.map((candidate) => (
+                      <span key={candidate.id}>
+                        {candidate.pageType} · P{candidate.priority}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              ))
+            )}
+          </section>
+        </section>
+      ) : null}
+
       {activeView === "settings" ? (
         <section className="page-view" aria-label="Settings">
           <header className="page-header">
@@ -1653,7 +1828,7 @@ function IconRail({
   return (
     <nav className="icon-rail" aria-label="Primary">
       <span className="rail-mark" aria-hidden="true">F</span>
-      {(["reader", "sources"] as const).map((view) => (
+      {(["reader", "sources", "hub"] as const).map((view) => (
         <button
           aria-current={activeView === view ? "page" : undefined}
           aria-label={viewLabel(view)}
@@ -1691,6 +1866,7 @@ function railIcon(name: ViewMode | "theme") {
   const paths: Record<string, string> = {
     reader: "M4 6h16M4 12h16M4 18h11",
     sources: "M4 4h16v16H4zM4 9.5h16",
+    hub: "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5",
     theme: "M12 7a5 5 0 100 10 5 5 0 000-10zM12 2v2M12 20v2M2 12h2M20 12h2",
     settings: "M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M2 12h3M19 12h3",
   };
@@ -2094,6 +2270,9 @@ function viewLabel(mode: ViewMode): string {
   }
   if (mode === "sources") {
     return "Sources";
+  }
+  if (mode === "hub") {
+    return "Hub";
   }
   return "Settings";
 }
