@@ -1,13 +1,24 @@
 //! JSON API feed adapter for sources that consume REST/JSON endpoints.
+//!
+//! Currently Weibo-specific (m.weibo.cn). When a second JSON provider lands, extract
+//! a provider trait that handles auth headers, error detection, time parsing, and
+//! content rendering — keep this file focused on the engine (fetch → parse → extract).
 
+use std::sync::LazyLock;
 use std::time::Duration;
 
+use regex::Regex;
 use serde_json::Value;
 
 use crate::models::{ParsedArticle, ParsedFeed, XPathSelectors};
 
 const JSON_FETCH_TIMEOUT_SECONDS: u64 = 20;
 const MAX_JSON_PAGES: usize = 5;
+
+static HTML_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[^>]+>").expect("compile html tag regex"));
+static TEMPLATE_VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{([^}]+)\}").expect("compile template var regex"));
 
 /// Weibo API request headers.
 fn weibo_headers(uid: &str) -> Vec<(&'static str, String)> {
@@ -32,15 +43,10 @@ pub async fn fetch_json_feed(
 ) -> Result<ParsedFeed, String> {
     let max_items = selectors.max_items.unwrap_or(40);
     let mut items: Vec<Value> = Vec::new();
+    let mut current_url = url.to_string();
 
-    for page in 0..MAX_JSON_PAGES {
-        let page_url = if page == 0 {
-            url.to_string()
-        } else {
-            break
-        };
-
-        let body = fetch_json_with_cookie(&page_url, cookie).await?;
+    for _page in 0..MAX_JSON_PAGES {
+        let body = fetch_json_with_cookie(&current_url, cookie).await?;
         let root: Value =
             serde_json::from_str(&body).map_err(|e| format!("Failed to parse JSON: {e}"))?;
 
@@ -57,7 +63,7 @@ pub async fn fetch_json_feed(
             break;
         }
 
-        // Cursor-based pagination via since_id
+        // Resolve next cursor for cursor-based pagination
         let next_cursor = selectors
             .next_page
             .as_ref()
@@ -75,7 +81,13 @@ pub async fn fetch_json_feed(
             break;
         }
 
-        break;
+        // Build next page URL by appending since_id cursor
+        let since_id = next_cursor.unwrap();
+        current_url = if url.contains('?') {
+            format!("{url}&since_id={since_id}")
+        } else {
+            format!("{url}?since_id={since_id}")
+        };
     }
 
     items.truncate(max_items);
@@ -171,6 +183,8 @@ fn extract_items(root: &Value, path: &str) -> Result<Vec<Value>, String> {
 
 /// Resolve a dot-separated JSON path with optional array indexing `[N]`.
 /// Example: "user.screen_name", "pics[0].large.url"
+///
+/// Returns `None` for unsupported syntax (e.g. mid-path filters).
 pub fn resolve_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     let mut current = value;
     for seg in path.split('.') {
@@ -184,7 +198,8 @@ pub fn resolve_json_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> 
             }
             let remaining = &seg[bracket..];
             if remaining.starts_with("[?") {
-                continue;
+                // Mid-path filter syntax not supported — fail explicitly
+                return None;
             }
             let inner = remaining.strip_prefix('[').and_then(|s| s.strip_suffix(']'))?;
             if let Ok(idx) = inner.parse::<usize>() {
@@ -265,9 +280,8 @@ fn parse_mblog_item(item: &Value, selectors: &XPathSelectors) -> Option<ParsedAr
 fn build_article_url(item: &Value, template: &str) -> Option<String> {
     if template.starts_with("http") {
         let mut url = template.to_string();
-        let re = regex::Regex::new(r"\{([^}]+)\}").ok()?;
         let mut success = true;
-        for cap in re.captures_iter(template) {
+        for cap in TEMPLATE_VAR_RE.captures_iter(template) {
             let placeholder = &cap[1];
             let value = resolve_json_path(item, placeholder).and_then(|v| match v {
                 Value::String(s) => Some(s.clone()),
@@ -304,9 +318,7 @@ fn parse_weibo_time(s: &str) -> String {
             "{} {} {} {} {} {}",
             parts[0], parts[1], parts[2], parts[3], parts[5], parts[4]
         );
-        if let Ok(dt) =
-            chrono::DateTime::parse_from_str(&reordered, "%a %b %d %H:%M:%S %Y %z")
-        {
+        if let Ok(dt) = chrono::DateTime::parse_from_str(&reordered, "%a %b %d %H:%M:%S %Y %z") {
             return dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string();
         }
     }
@@ -314,8 +326,7 @@ fn parse_weibo_time(s: &str) -> String {
 }
 
 fn strip_html_summary(html: &str, max_len: usize) -> String {
-    let re = regex::Regex::new(r"<[^>]+>").unwrap();
-    let plain = re.replace_all(html, "").to_string();
+    let plain = HTML_TAG_RE.replace_all(html, "").to_string();
     let trimmed: String = plain
         .chars()
         .filter(|c| !c.is_control() || *c == '\n')
@@ -386,6 +397,13 @@ mod tests {
         let v = json!({"pics": [{"large": {"url": "https://img.jpg"}}]});
         let result = resolve_json_path(&v, "pics[0].large.url");
         assert_eq!(result.and_then(|v| v.as_str()), Some("https://img.jpg"));
+    }
+
+    #[test]
+    fn rejects_mid_path_filter() {
+        let v = json!({"data": {"cards": [{"type": "text"}]}});
+        let result = resolve_json_path(&v, "data.cards[?(@.type=='text')].content");
+        assert!(result.is_none());
     }
 
     #[test]
