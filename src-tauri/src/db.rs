@@ -768,6 +768,130 @@ impl AppDatabase {
         Ok(())
     }
 
+    /// Read an app_settings value by key.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Upsert an app_settings key-value.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Read plugin-level refresh interval override.
+    pub fn get_plugin_refresh_interval(&self, plugin_id: &str) -> Result<Option<i64>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .query_row(
+                "SELECT refresh_interval_seconds FROM plugin_auto_refresh WHERE plugin_id = ?1",
+                params![plugin_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Upsert a plugin-level refresh interval override.
+    pub fn set_plugin_refresh_interval(
+        &self,
+        plugin_id: &str,
+        seconds: i64,
+    ) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO plugin_auto_refresh (plugin_id, refresh_interval_seconds)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(plugin_id) DO UPDATE SET refresh_interval_seconds = excluded.refresh_interval_seconds",
+                params![plugin_id, seconds],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Set or clear a source-level refresh interval override.
+    pub fn set_source_refresh_interval(
+        &self,
+        source_id: i64,
+        seconds: Option<i64>,
+    ) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "UPDATE sources SET refresh_interval_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+                params![seconds, now_string(), source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// List all plugin refresh overrides with display names derived from source configs.
+    pub fn list_plugin_refresh_overrides(
+        &self,
+    ) -> Result<Vec<PluginRefreshOverride>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT plugin_id, refresh_interval_seconds FROM plugin_auto_refresh ORDER BY plugin_id",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(PluginRefreshOverride {
+                    plugin_id: row.get(0)?,
+                    plugin_name: String::new(), // filled in below
+                    refresh_interval_seconds: row.get(1)?,
+                })
+            })
+            .map_err(|error| error.to_string())?;
+        let mut overrides: Vec<PluginRefreshOverride> = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+
+        // Fill in plugin names by looking at source configs.
+        for ov in &mut overrides {
+            if let Ok(name) = connection.query_row(
+                "SELECT s.config_json FROM sources s
+                 WHERE json_extract(s.config_json, '$.plugin.id') = ?1
+                 LIMIT 1",
+                params![ov.plugin_id],
+                |row| {
+                    let config: String = row.get(0)?;
+                    Ok(config)
+                },
+            ).optional().map_err(|e| e.to_string()) {
+                if let Some(config) = name {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&config) {
+                        if let Some(name) = parsed["plugin"]["name"].as_str() {
+                            ov.plugin_name = name.to_string();
+                        }
+                    }
+                }
+            }
+            if ov.plugin_name.is_empty() {
+                ov.plugin_name = ov.plugin_id.clone();
+            }
+        }
+
+        Ok(overrides)
+    }
+
     fn update_article_state(
         &self,
         article_id: i64,

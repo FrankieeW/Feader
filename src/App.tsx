@@ -31,6 +31,7 @@ type Source = {
   lastError?: string | null;
   articleCount: number;
   unreadCount: number;
+  refreshIntervalSeconds?: number | null;
 };
 
 type Article = {
@@ -207,6 +208,28 @@ type PluginCredential = {
 };
 
 type CredentialCheck = { ok: boolean; message: string; checkedAt: string };
+
+type AutoRefreshConfig = {
+  enabled: boolean;
+  globalIntervalSeconds: number;
+  pluginOverrides: PluginRefreshOverride[];
+  nextRefreshAt?: string | null;
+};
+
+type PluginRefreshOverride = {
+  pluginId: string;
+  pluginName: string;
+  refreshIntervalSeconds: number;
+};
+
+type RefreshTickEvent = {
+  refreshing: boolean;
+  currentSourceId?: number | null;
+  currentSourceTitle?: string | null;
+  nextRefreshAt?: string | null;
+  sourcesChecked: number;
+  sourcesRefreshed: number;
+};
 
 type XPathRulePack = {
   id: string;
@@ -502,6 +525,12 @@ const testModeArticles: Article[] = [
 let testModeSourceState = testModeSources.map((source) => ({ ...source }));
 let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
 let testModeAiSettings: AiSettings = { ...defaultAiSettings };
+let testModeAutoRefresh: AutoRefreshConfig = {
+  enabled: true,
+  globalIntervalSeconds: 1800,
+  pluginOverrides: [],
+  nextRefreshAt: null,
+};
 const testModeXPathRulePacks: XPathRulePack[] = [
   {
     id: "official.naixi-forum.xpath",
@@ -789,6 +818,38 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       return { pluginId: String(args?.pluginId ?? ""), cookieSet: Boolean(String(args?.cookie ?? "").trim()) } as T;
     case "check_plugin_credential":
       return { ok: true, message: "测试模式:已登录", checkedAt: new Date().toISOString() } as T;
+    case "get_auto_refresh_config":
+      return testModeAutoRefresh as T;
+    case "set_global_refresh_interval": {
+      const seconds = Number(args?.seconds);
+      testModeAutoRefresh = { ...testModeAutoRefresh, globalIntervalSeconds: seconds };
+      return testModeAutoRefresh as T;
+    }
+    case "set_plugin_refresh_interval": {
+      const pluginId = String(args?.pluginId ?? "");
+      const seconds = Number(args?.seconds);
+      testModeAutoRefresh = {
+        ...testModeAutoRefresh,
+        pluginOverrides: [
+          ...testModeAutoRefresh.pluginOverrides.filter((o) => o.pluginId !== pluginId),
+          { pluginId, pluginName: pluginId, refreshIntervalSeconds: seconds },
+        ],
+      };
+      return testModeAutoRefresh as T;
+    }
+    case "set_source_refresh_interval": {
+      const sourceId = Number(args?.sourceId);
+      const seconds = args?.seconds != null ? Number(args.seconds) : null;
+      testModeSourceState = testModeSourceState.map((source) =>
+        source.id === sourceId ? { ...source, refreshIntervalSeconds: seconds } : source,
+      );
+      return testModeAutoRefresh as T;
+    }
+    case "set_auto_refresh_enabled": {
+      const enabled = Boolean(args?.enabled);
+      testModeAutoRefresh = { ...testModeAutoRefresh, enabled };
+      return testModeAutoRefresh as T;
+    }
     default:
       throw new Error(`Test mode command '${command}' is not implemented.`);
   }
@@ -852,6 +913,16 @@ function upsertTestModeSource(url = builtInTestFeedUrl, title = "小众软件"):
 }
 
 const uncategorizedLabel = "Uncategorized";
+
+const REFRESH_INTERVAL_PRESETS = [
+  { label: "15m", seconds: 900 },
+  { label: "30m", seconds: 1800 },
+  { label: "1h", seconds: 3600 },
+  { label: "2h", seconds: 7200 },
+  { label: "6h", seconds: 21600 },
+  { label: "12h", seconds: 43200 },
+  { label: "24h", seconds: 86400 },
+];
 
 function groupSourcesByCategory(sources: Source[]): { category: string; sources: Source[] }[] {
   const groups = new Map<string, Source[]>();
@@ -935,6 +1006,8 @@ function App() {
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
+  const [autoRefreshConfig, setAutoRefreshConfig] = useState<AutoRefreshConfig | null>(null);
+  const [refreshTick, setRefreshTick] = useState<RefreshTickEvent | null>(null);
 
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === selectedSourceId),
@@ -968,6 +1041,23 @@ function App() {
     void loadWalletSession();
     void loadAiSettings();
     void loadXPathPluginPacks();
+    void loadAutoRefreshConfig();
+    // Listen for refresh-tick events from backend scheduler
+    let unlisten: (() => void) | undefined;
+    if (isTauriRuntime()) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          listen<RefreshTickEvent>("refresh-tick", (event) => {
+            setRefreshTick(event.payload);
+          }).then((fn) => {
+            unlisten = fn;
+          });
+        })
+        .catch(() => {});
+    }
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -1063,6 +1153,15 @@ function App() {
     }
     setSelectedManagerSourceId(sources[0]?.id);
   }, [activeView, selectedManagerSourceId, sources]);
+
+  async function loadAutoRefreshConfig(): Promise<void> {
+    try {
+      const config = await invoke<AutoRefreshConfig>("get_auto_refresh_config");
+      setAutoRefreshConfig(config);
+    } catch {
+      // Silently use defaults when backend is unavailable
+    }
+  }
 
   async function loadData(
     sourceId = selectedSourceId,
@@ -1630,6 +1729,53 @@ function App() {
     localStorage.removeItem(entryLayoutStorageKey);
   }
 
+  async function handleToggleAutoRefresh(enabled: boolean): Promise<void> {
+    const config = await invoke<AutoRefreshConfig>("set_auto_refresh_enabled", { enabled });
+    setAutoRefreshConfig(config);
+    setStatus(enabled ? "Auto-refresh enabled" : "Auto-refresh paused");
+  }
+
+  async function handleSetGlobalRefreshInterval(seconds: number): Promise<void> {
+    const config = await invoke<AutoRefreshConfig>("set_global_refresh_interval", { seconds });
+    setAutoRefreshConfig(config);
+    setStatus(`Global refresh interval set to ${formatInterval(seconds)}`);
+  }
+
+  async function handleSetPluginRefreshInterval(pluginId: string, seconds: number): Promise<void> {
+    const config = await invoke<AutoRefreshConfig>("set_plugin_refresh_interval", {
+      pluginId,
+      seconds,
+    });
+    setAutoRefreshConfig(config);
+  }
+
+  async function handleSetSourceRefreshInterval(
+    sourceId: number,
+    seconds: number | null,
+  ): Promise<void> {
+    const config = await invoke<AutoRefreshConfig>("set_source_refresh_interval", {
+      sourceId,
+      seconds,
+    });
+    setAutoRefreshConfig(config);
+    await loadData(selectedSourceId, filterMode, selectedArticleId);
+  }
+
+  function formatInterval(seconds: number): string {
+    if (seconds < 120) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(1).replace(/\.0$/, "")}h`;
+    return `${(seconds / 86400).toFixed(1).replace(/\.0$/, "")}d`;
+  }
+
+  function formatCountdown(isoString: string | null | undefined): string {
+    if (!isoString) return "";
+    const diff = Math.max(0, (Date.parse(isoString) - Date.now()) / 1000);
+    if (diff < 60) return "soon";
+    if (diff < 3600) return `${Math.round(diff / 60)}m`;
+    return `${(diff / 3600).toFixed(1).replace(/\.0$/, "")}h`;
+  }
+
   async function runTask(
     label: string,
     task: () => Promise<void>,
@@ -1699,14 +1845,22 @@ function App() {
 
         {activeView === "reader" ? (
           <>
-            <button
-              className="secondary-action full-width"
-              disabled={isBusy}
-              onClick={handleRefreshAll}
-              type="button"
-            >
-              Refresh all sources
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <button
+                className="secondary-action"
+                style={{ flex: 1 }}
+                disabled={isBusy}
+                onClick={handleRefreshAll}
+                type="button"
+              >
+                Refresh all sources
+              </button>
+              {autoRefreshConfig?.enabled && refreshTick?.nextRefreshAt ? (
+                <span className="badge" title="Next auto-refresh" style={{ fontSize: "0.75rem", opacity: 0.7, whiteSpace: "nowrap" }}>
+                  {formatCountdown(refreshTick.nextRefreshAt)}
+                </span>
+              ) : null}
+            </div>
 
             <nav className="feed-list" aria-label="Feeds">
               <button
@@ -2045,6 +2199,9 @@ function App() {
               onRename={(id, title) => void handleRenameSourceId(id, title)}
               onSaveXPath={() => void handleSaveXPathEdit(selectedManagerSource)}
               onSetCategory={(id, category) => void handleSetCategory(id, category)}
+              onSetRefreshInterval={(id, seconds) =>
+                void handleSetSourceRefreshInterval(id, seconds)
+              }
               onStartXPathEdit={() => handleStartEditXPathSource(selectedManagerSource)}
               onXPathSelectorsChange={setEditXPathSelectors}
               source={selectedManagerSource}
@@ -2571,6 +2728,86 @@ function App() {
 
             <article className="settings-card">
               <div className="panel-heading">
+                <span>Auto Refresh</span>
+                <span>
+                  {autoRefreshConfig?.enabled
+                    ? refreshTick?.refreshing
+                      ? "Refreshing…"
+                      : refreshTick?.nextRefreshAt
+                        ? `Next: ${formatCountdown(refreshTick.nextRefreshAt)}`
+                        : `Every ${formatInterval(autoRefreshConfig?.globalIntervalSeconds ?? 1800)}`
+                    : "Paused"}
+                </span>
+              </div>
+              <label className="preference-strip">
+                <span>Enable background refresh</span>
+                <input
+                  type="checkbox"
+                  checked={autoRefreshConfig?.enabled ?? true}
+                  onChange={(e) => void handleToggleAutoRefresh(e.target.checked)}
+                />
+              </label>
+              <div style={{ marginTop: "0.75rem" }}>
+                <span className="preference-label">Global interval</span>
+                <div className="interval-presets" style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.35rem" }}>
+                  {REFRESH_INTERVAL_PRESETS.map((preset) => (
+                    <button
+                      key={preset.seconds}
+                      className={`chip ${
+                        (autoRefreshConfig?.globalIntervalSeconds ?? 1800) === preset.seconds
+                          ? "active"
+                          : ""
+                      }`}
+                      onClick={() => void handleSetGlobalRefreshInterval(preset.seconds)}
+                      type="button"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {autoRefreshConfig?.pluginOverrides && autoRefreshConfig.pluginOverrides.length > 0 ? (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <span className="preference-label">Plugin overrides</span>
+                  <dl style={{ marginTop: "0.35rem" }}>
+                    {autoRefreshConfig.pluginOverrides.map((ov) => (
+                      <div key={ov.pluginId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.25rem 0" }}>
+                        <dt style={{ flex: 1 }}>{ov.pluginName}</dt>
+                        <dd>
+                          <select
+                            value={ov.refreshIntervalSeconds}
+                            onChange={(e) =>
+                              void handleSetPluginRefreshInterval(ov.pluginId, Number(e.target.value))
+                            }
+                          >
+                            {REFRESH_INTERVAL_PRESETS.map((p) => (
+                              <option key={p.seconds} value={p.seconds}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ) : null}
+              {refreshTick?.refreshing ? (
+                <div className="preference-strip" style={{ marginTop: "0.75rem" }}>
+                  <span>
+                    {refreshTick.currentSourceTitle
+                      ? `Refreshing: ${refreshTick.currentSourceTitle}`
+                      : "Checking sources…"}
+                  </span>
+                  <span>
+                    {refreshTick.sourcesRefreshed}/{refreshTick.sourcesChecked}
+                  </span>
+                </div>
+              ) : null}
+            </article>
+
+            <article className="settings-card">
+              <div className="panel-heading">
                 <span>Reading flow</span>
                 <span>{selectedArticle ? "Active" : "Idle"}</span>
               </div>
@@ -2903,6 +3140,7 @@ function SourceDetailPanel({
   onRename,
   onSaveXPath,
   onSetCategory,
+  onSetRefreshInterval,
   onStartXPathEdit,
   onXPathSelectorsChange,
   source,
@@ -2920,6 +3158,7 @@ function SourceDetailPanel({
   onRename: (sourceId: number, title: string) => void;
   onSaveXPath: () => void;
   onSetCategory: (sourceId: number, category: string) => void;
+  onSetRefreshInterval: (sourceId: number, seconds: number | null) => void;
   onStartXPathEdit: () => void;
   onXPathSelectorsChange: (selectors: XPathSelectors) => void;
   source: Source;
@@ -2980,6 +3219,24 @@ function SourceDetailPanel({
             <dd>{source.articleCount}</dd>
             <dt>Last refresh</dt>
             <dd>{formatDate(source.lastFetchedAt)}</dd>
+            <dt>Refresh interval</dt>
+            <dd>
+              <select
+                value={source.refreshIntervalSeconds ?? ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onSetRefreshInterval(source.id, val ? Number(val) : null);
+                }}
+                style={{ fontSize: "0.85rem" }}
+              >
+                <option value="">Inherit (global)</option>
+                {REFRESH_INTERVAL_PRESETS.map((p) => (
+                  <option key={p.seconds} value={p.seconds}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </dd>
           </dl>
           {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
         </div>
