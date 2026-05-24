@@ -1205,7 +1205,7 @@ function App() {
   function pluginUrlFromParams(pack: XPathRulePack, params: Record<string, string>): string {
     let url = pack.parameters?.urlTemplate ?? "";
     for (const [key, value] of Object.entries(params)) {
-      url = url.replace(`{${key}}`, encodeURIComponent(value));
+      url = url.split(`{${key}}`).join(encodeURIComponent(value));
     }
     return url;
   }
