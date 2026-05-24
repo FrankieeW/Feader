@@ -833,6 +833,21 @@ function App() {
     });
   }
 
+  async function handleSuggestXPath(): Promise<void> {
+    const url = feedUrl.trim();
+    if (!url) {
+      setStatus("Enter a page URL first.");
+      return;
+    }
+
+    await runTask("Suggesting selectors", async () => {
+      const suggested = await invoke<XPathSelectors>("suggest_xpath_source", { url });
+      setXPathSelectors({ ...defaultXPathSelectors, ...suggested });
+      setXPathPreview(null);
+      setStatus("AI suggested selectors. Run Preview to validate.");
+    });
+  }
+
   async function handleSelectSource(sourceId?: number): Promise<void> {
     setSelectedSourceId(sourceId);
     await loadData(sourceId, filterMode, undefined);
@@ -1337,9 +1352,11 @@ function App() {
                     />
                     {sourceInputMode === "xpath" ? (
                       <XPathSourceForm
+                        aiAvailable={aiSettings.enabled && aiSettings.apiKeySet}
                         isBusy={isBusy}
                         onPreview={() => void handlePreviewXPath()}
                         onSelectorsChange={setXPathSelectors}
+                        onSuggest={() => void handleSuggestXPath()}
                         onTitleChange={setXPathTitle}
                         preview={xpathPreview}
                         selectors={xpathSelectors}
@@ -2158,17 +2175,21 @@ function buildArticleFilter(sourceId: number | undefined, mode: FilterMode): Art
 }
 
 function XPathSourceForm({
+  aiAvailable,
   isBusy,
   onPreview,
   onSelectorsChange,
+  onSuggest,
   onTitleChange,
   preview,
   selectors,
   title,
 }: {
+  aiAvailable: boolean;
   isBusy: boolean;
   onPreview: () => void;
   onSelectorsChange: (selectors: XPathSelectors) => void;
+  onSuggest: () => void;
   onTitleChange: (title: string) => void;
   preview: XPathPreview | null;
   selectors: XPathSelectors;
@@ -2274,6 +2295,11 @@ function XPathSourceForm({
           selectors={selectors}
         />
       </details>
+      {aiAvailable ? (
+        <button disabled={isBusy} onClick={onSuggest} type="button">
+          Suggest with AI
+        </button>
+      ) : null}
       <button disabled={isBusy} onClick={onPreview} type="button">
         Preview
       </button>
