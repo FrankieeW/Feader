@@ -69,7 +69,7 @@ type SourceRefreshResult = {
 };
 
 type FilterMode = "all" | "unread" | "saved";
-type SourceInputMode = "rss" | "xpath";
+type SourceInputMode = "rss" | "rsshub" | "xpath";
 type ThemeMode = "light" | "dark" | "system";
 type ViewMode = "reader" | "sources" | "hub" | "settings";
 type EntryLayout = "list" | "card";
@@ -208,6 +208,32 @@ type PluginCredential = {
 };
 
 type CredentialCheck = { ok: boolean; message: string; checkedAt: string };
+
+type RssHubInstance = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  maintainer: string;
+  location?: string | null;
+  official: boolean;
+  builtin: boolean;
+};
+
+type RssHubSettings = {
+  globalInstanceId: string;
+  instances: RssHubInstance[];
+};
+
+type RssHubSourceConfig = {
+  route: string;
+  instanceId?: string | null;
+};
+
+type RssHubInstanceCheck = {
+  ok: boolean;
+  message: string;
+  checkedUrl: string;
+};
 
 type AutoRefreshConfig = {
   enabled: boolean;
@@ -399,6 +425,30 @@ const defaultAiSettings: AiSettings = {
   updatedAt: "",
 };
 
+const defaultRssHubSettings: RssHubSettings = {
+  globalInstanceId: "rsshub-rssforever",
+  instances: [
+    {
+      id: "rsshub-app",
+      name: "RSSHub Official",
+      baseUrl: "https://rsshub.app",
+      maintainer: "DIYgod",
+      location: "US",
+      official: true,
+      builtin: true,
+    },
+    {
+      id: "rsshub-rssforever",
+      name: "RSSForever",
+      baseUrl: "https://rsshub.rssforever.com",
+      maintainer: "Stille",
+      location: "AE",
+      official: false,
+      builtin: true,
+    },
+  ],
+};
+
 const testModeSources: Source[] = [
   {
     id: 1,
@@ -423,6 +473,20 @@ const testModeSources: Source[] = [
     enabled: true,
     createdAt: "2026-05-23T09:00:00.000Z",
     lastFetchedAt: "2026-05-23T09:00:00.000Z",
+    lastError: null,
+    articleCount: 0,
+    unreadCount: 0,
+  },
+  {
+    id: 3,
+    kind: "rsshub",
+    title: "RSSHub GitHub Trending",
+    url: "/github/trending/daily/javascript",
+    category: "RSSHub",
+    configJson: JSON.stringify({ route: "/github/trending/daily/javascript" }),
+    enabled: true,
+    createdAt: "2026-05-23T10:00:00.000Z",
+    lastFetchedAt: null,
     lastError: null,
     articleCount: 0,
     unreadCount: 0,
@@ -525,6 +589,10 @@ const testModeArticles: Article[] = [
 let testModeSourceState = testModeSources.map((source) => ({ ...source }));
 let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
 let testModeAiSettings: AiSettings = { ...defaultAiSettings };
+let testModeRssHubSettings: RssHubSettings = {
+  ...defaultRssHubSettings,
+  instances: defaultRssHubSettings.instances.map((instance) => ({ ...instance })),
+};
 let testModeAutoRefresh: AutoRefreshConfig = {
   enabled: true,
   globalIntervalSeconds: 1800,
@@ -669,6 +737,16 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       const request = args?.request as { url?: string; title?: string } | undefined;
       return upsertTestModeSource(request?.url, request?.title) as T;
     }
+    case "add_rsshub_source": {
+      const request = args?.request as
+        | { route?: string; title?: string; instanceId?: string | null }
+        | undefined;
+      return upsertTestModeRssHubSource(
+        request?.route,
+        request?.title,
+        request?.instanceId ?? undefined,
+      ) as T;
+    }
     case "create_wallet_login_challenge":
       return {
         nonce: "testnonce1",
@@ -717,6 +795,59 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
         updatedAt: new Date().toISOString(),
       };
       return testModeAiSettings as T;
+    }
+    case "get_rsshub_settings":
+      return testModeRssHubSettings as T;
+    case "set_rsshub_global_instance": {
+      const instanceId = String(args?.instanceId ?? "");
+      if (testModeRssHubSettings.instances.some((instance) => instance.id === instanceId)) {
+        testModeRssHubSettings = { ...testModeRssHubSettings, globalInstanceId: instanceId };
+      }
+      return testModeRssHubSettings as T;
+    }
+    case "update_rsshub_source_instance": {
+      const request = args?.request as { sourceId?: number; instanceId?: string | null } | undefined;
+      const sourceId = Number(request?.sourceId);
+      testModeSourceState = testModeSourceState.map((source) => {
+        if (source.id !== sourceId || source.kind !== "rsshub") return source;
+        const config = readRssHubConfigFromSource(source) ?? { route: source.url };
+        return {
+          ...source,
+          configJson: JSON.stringify({
+            ...config,
+            instanceId: request?.instanceId || undefined,
+          }),
+        };
+      });
+      return testModeSourceState.find((source) => source.id === sourceId) as T;
+    }
+    case "add_rsshub_instance": {
+      const request = args?.request as { name?: string; baseUrl?: string } | undefined;
+      const baseUrl = normalizeRssHubBaseUrl(request?.baseUrl ?? "");
+      const instance: RssHubInstance = {
+        id: instanceIdFromBaseUrl(baseUrl),
+        name: request?.name?.trim() || baseUrl.replace(/^https?:\/\//, ""),
+        baseUrl,
+        maintainer: "Custom",
+        location: null,
+        official: false,
+        builtin: false,
+      };
+      if (!testModeRssHubSettings.instances.some((item) => item.id === instance.id)) {
+        testModeRssHubSettings = {
+          ...testModeRssHubSettings,
+          instances: [...testModeRssHubSettings.instances, instance],
+        };
+      }
+      return testModeRssHubSettings as T;
+    }
+    case "check_rsshub_instance": {
+      const baseUrl = normalizeRssHubBaseUrl(String(args?.baseUrl ?? ""));
+      return {
+        ok: true,
+        message: "Test mode health check passed",
+        checkedUrl: `${baseUrl}/healthz`,
+      } as T;
     }
     case "list_xpath_plugin_packs":
       return testModeXPathRulePacks as T;
@@ -912,6 +1043,69 @@ function upsertTestModeSource(url = builtInTestFeedUrl, title = "小众软件"):
   return source;
 }
 
+function upsertTestModeRssHubSource(
+  route = "/github/trending/daily/javascript",
+  title = "RSSHub source",
+  instanceId?: string | null,
+): Source {
+  const normalizedRoute = normalizeRssHubRoute(route);
+  const existing = testModeSourceState.find(
+    (source) => source.kind === "rsshub" && source.url === normalizedRoute,
+  );
+  if (existing) {
+    return existing;
+  }
+
+  const config: RssHubSourceConfig = {
+    route: normalizedRoute,
+    instanceId: instanceId || undefined,
+  };
+  const source: Source = {
+    id: Math.max(0, ...testModeSourceState.map((item) => item.id)) + 1,
+    kind: "rsshub",
+    title: title.trim() || normalizedRoute,
+    url: normalizedRoute,
+    category: "RSSHub",
+    configJson: JSON.stringify(config),
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    lastFetchedAt: new Date().toISOString(),
+    lastError: null,
+    articleCount: 0,
+    unreadCount: 0,
+  };
+  testModeSourceState = [...testModeSourceState, source];
+  return source;
+}
+
+function normalizeRssHubRoute(route: string): string {
+  const trimmed = route.trim();
+  if (!trimmed) return "/github/trending/daily/javascript";
+  try {
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      const parsed = new URL(trimmed);
+      return `${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function normalizeRssHubBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  return trimmed || "https://rsshub.rssforever.com";
+}
+
+function instanceIdFromBaseUrl(baseUrl: string): string {
+  return baseUrl
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 const uncategorizedLabel = "Uncategorized";
 
 const REFRESH_INTERVAL_PRESETS = [
@@ -964,7 +1158,6 @@ function App() {
   const [selectedManagerSourceId, setSelectedManagerSourceId] = useState<number | undefined>();
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [readerView, setReaderView] = useState<ReaderView>("none");
-  const [userChoseTypography, setUserChoseTypography] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
   const [activeView, setActiveView] = useState<ViewMode>("reader");
@@ -976,6 +1169,10 @@ function App() {
   );
   const [paneWidths, setPaneWidths] = useState<PaneWidths>(() => readInitialPaneWidths());
   const [feedUrl, setFeedUrl] = useState("");
+  const [rssHubTitle, setRssHubTitle] = useState("");
+  const [rssHubInstanceId, setRssHubInstanceId] = useState("");
+  const [rssHubStatus, setRssHubStatus] = useState<string | null>(null);
+  const [rssHubSettings, setRssHubSettings] = useState<RssHubSettings>(defaultRssHubSettings);
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
@@ -1040,6 +1237,7 @@ function App() {
     void loadData();
     void loadWalletSession();
     void loadAiSettings();
+    void loadRssHubSettings();
     void loadXPathPluginPacks();
     void loadAutoRefreshConfig();
     // Listen for refresh-tick events from backend scheduler
@@ -1188,6 +1386,12 @@ function App() {
     setAiSettings(settings);
   }
 
+  async function loadRssHubSettings(): Promise<void> {
+    const settings = await invoke<RssHubSettings>("get_rsshub_settings");
+    setRssHubSettings(settings);
+    setRssHubInstanceId((current) => current || "");
+  }
+
   async function loadXPathPluginPacks(forceRefresh = false): Promise<void> {
     try {
       const packs = await invoke<XPathRulePack[]>("fetch_registry_packs", {
@@ -1333,6 +1537,32 @@ function App() {
     });
   }
 
+  async function handleSetRssHubGlobalInstance(instanceId: string): Promise<void> {
+    await runTask("Saving RSSHub settings", async () => {
+      const next = await invoke<RssHubSettings>("set_rsshub_global_instance", { instanceId });
+      setRssHubSettings(next);
+      setStatus("RSSHub global instance updated");
+    });
+  }
+
+  async function handleAddRssHubInstance(name: string, baseUrl: string): Promise<void> {
+    await runTask("Adding RSSHub instance", async () => {
+      const next = await invoke<RssHubSettings>("add_rsshub_instance", {
+        request: { name, baseUrl },
+      });
+      setRssHubSettings(next);
+      setStatus("RSSHub instance added");
+    });
+  }
+
+  async function handleCheckRssHubInstance(baseUrl: string): Promise<void> {
+    await runTask("Checking RSSHub instance", async () => {
+      const result = await invoke<RssHubInstanceCheck>("check_rsshub_instance", { baseUrl });
+      setRssHubStatus(result.message);
+      setStatus(`${result.ok ? "RSSHub available" : "RSSHub check failed"}: ${result.checkedUrl}`);
+    }, setRssHubStatus);
+  }
+
   async function handleConnectWallet(): Promise<void> {
     await runTask("Connecting wallet", async () => {
       if (isWalletConnectConfigured) {
@@ -1396,12 +1626,22 @@ function App() {
 
     if (sourceInputMode === "xpath") {
       setXPathStatus("Confirming XPath source...");
+    } else if (sourceInputMode === "rsshub") {
+      setRssHubStatus("Confirming RSSHub route...");
     }
     await runTask("Adding feed", async () => {
       const source =
         sourceInputMode === "rss"
           ? await invoke<Source>("add_source", { request: { url } })
-          : await invoke<Source>("add_xpath_source", {
+          : sourceInputMode === "rsshub"
+            ? await invoke<Source>("add_rsshub_source", {
+                request: {
+                  route: url,
+                  title: rssHubTitle,
+                  instanceId: rssHubInstanceId || null,
+                },
+              })
+            : await invoke<Source>("add_xpath_source", {
               request: {
                 url,
                 title: xpathTitle,
@@ -1409,6 +1649,9 @@ function App() {
               },
             });
       setFeedUrl("");
+      setRssHubTitle("");
+      setRssHubInstanceId("");
+      setRssHubStatus(null);
       setXPathTitle("");
       setXPathPreview(null);
       setXPathStatus(null);
@@ -1418,7 +1661,7 @@ function App() {
       setFilterMode("all");
       await loadData(source.id, "all", undefined);
       setStatus(`Added ${source.title}`);
-    }, sourceInputMode === "xpath" ? setXPathStatus : undefined);
+    }, sourceInputMode === "xpath" ? setXPathStatus : sourceInputMode === "rsshub" ? setRssHubStatus : undefined);
   }
 
   async function handlePreviewXPath(): Promise<void> {
@@ -1759,6 +2002,19 @@ function App() {
     });
     setAutoRefreshConfig(config);
     await loadData(selectedSourceId, filterMode, selectedArticleId);
+  }
+
+  async function handleSetSourceRssHubInstance(
+    sourceId: number,
+    instanceId: string | null,
+  ): Promise<void> {
+    await runTask("Updating RSSHub source", async () => {
+      await invoke<Source>("update_rsshub_source_instance", {
+        request: { sourceId, instanceId },
+      });
+      await loadData(selectedSourceId, filterMode, selectedArticleId);
+      setStatus("RSSHub source instance updated");
+    });
   }
 
   function formatInterval(seconds: number): string {
@@ -2122,7 +2378,7 @@ function App() {
               <form className="feed-form" onSubmit={handleAddFeed}>
                 <section className="adapter-workbench">
                   <div className="adapter-rail" role="tablist" aria-label="Source type">
-                    {(["rss", "xpath"] as const).map((mode) => (
+                    {(["rss", "rsshub", "xpath"] as const).map((mode) => (
                       <button
                         aria-selected={sourceInputMode === mode}
                         className={sourceInputMode === mode ? "active" : ""}
@@ -2138,17 +2394,36 @@ function App() {
                   </div>
                   <div className="adapter-panel">
                     <input
-                      aria-label={sourceInputMode === "rss" ? "Feed URL" : "Page URL"}
+                      aria-label={
+                        sourceInputMode === "rss"
+                          ? "Feed URL"
+                          : sourceInputMode === "rsshub"
+                            ? "RSSHub route"
+                            : "Page URL"
+                      }
                       disabled={isBusy}
                       onChange={(event) => setFeedUrl(event.currentTarget.value)}
                       placeholder={
                         sourceInputMode === "rss"
                           ? "https://example.com/feed.xml"
+                          : sourceInputMode === "rsshub"
+                            ? "/github/trending/daily/javascript"
                           : "https://example.com/articles"
                       }
                       value={feedUrl}
                     />
-                    {sourceInputMode === "xpath" ? (
+                    {sourceInputMode === "rsshub" ? (
+                      <RssHubSourceForm
+                        instanceId={rssHubInstanceId}
+                        instances={rssHubSettings.instances}
+                        isBusy={isBusy}
+                        onCheckInstance={(baseUrl) => void handleCheckRssHubInstance(baseUrl)}
+                        onInstanceChange={setRssHubInstanceId}
+                        onTitleChange={setRssHubTitle}
+                        status={rssHubStatus}
+                        title={rssHubTitle}
+                      />
+                    ) : sourceInputMode === "xpath" ? (
                       <XPathSourceForm
                         aiAvailable={aiSettings.enabled && aiSettings.apiKeySet}
                         isBusy={isBusy}
@@ -2202,8 +2477,12 @@ function App() {
               onSetRefreshInterval={(id, seconds) =>
                 void handleSetSourceRefreshInterval(id, seconds)
               }
+              onSetRssHubInstance={(id, instanceId) =>
+                void handleSetSourceRssHubInstance(id, instanceId)
+              }
               onStartXPathEdit={() => handleStartEditXPathSource(selectedManagerSource)}
               onXPathSelectorsChange={setEditXPathSelectors}
+              rssHubSettings={rssHubSettings}
               source={selectedManagerSource}
             />
           ) : (
@@ -2686,6 +2965,15 @@ function App() {
               settings={aiSettings}
             />
 
+            <RssHubSettingsCard
+              disabled={isBusy}
+              onAddInstance={(name, baseUrl) => void handleAddRssHubInstance(name, baseUrl)}
+              onCheckInstance={(baseUrl) => void handleCheckRssHubInstance(baseUrl)}
+              onGlobalInstanceChange={(instanceId) => void handleSetRssHubGlobalInstance(instanceId)}
+              settings={rssHubSettings}
+              status={rssHubStatus}
+            />
+
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Workspace</span>
@@ -2716,7 +3004,7 @@ function App() {
               </div>
               <ReaderTypographyControl
                 mode={readerTypography}
-                onChange={(mode) => { setUserChoseTypography(true); setReaderTypography(mode); }}
+                onChange={setReaderTypography}
               />
               <dl>
                 <dt>Body</dt>
@@ -3102,6 +3390,155 @@ function AiSettingsCard({
   );
 }
 
+function RssHubSourceForm({
+  instanceId,
+  instances,
+  isBusy,
+  onCheckInstance,
+  onInstanceChange,
+  onTitleChange,
+  status,
+  title,
+}: {
+  instanceId: string;
+  instances: RssHubInstance[];
+  isBusy: boolean;
+  onCheckInstance: (baseUrl: string) => void;
+  onInstanceChange: (instanceId: string) => void;
+  onTitleChange: (title: string) => void;
+  status: string | null;
+  title: string;
+}) {
+  const selectedInstance = instances.find((instance) => instance.id === instanceId);
+  const fallbackInstance =
+    instances.find((instance) => instance.id === defaultRssHubSettings.globalInstanceId) ??
+    instances[0];
+  return (
+    <section className="rsshub-form">
+      <label>
+        <span>Title</span>
+        <input
+          disabled={isBusy}
+          onChange={(event) => onTitleChange(event.currentTarget.value)}
+          placeholder="Optional, uses upstream feed title when blank"
+          value={title}
+        />
+      </label>
+      <label>
+        <span>Instance override</span>
+        <select
+          disabled={isBusy}
+          onChange={(event) => onInstanceChange(event.currentTarget.value)}
+          value={instanceId}
+        >
+          <option value="">Inherit global instance</option>
+          {instances.map((instance) => (
+            <option key={instance.id} value={instance.id}>
+              {instance.name} · {instance.baseUrl}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="adapter-summary rsshub-instance-summary" aria-label="RSSHub instance status">
+        <span>RSSHub route</span>
+        <span>{selectedInstance ? selectedInstance.name : "Global default"}</span>
+        <button
+          disabled={isBusy || !fallbackInstance}
+          onClick={() => onCheckInstance(selectedInstance?.baseUrl ?? fallbackInstance.baseUrl)}
+          type="button"
+        >
+          Check availability
+        </button>
+      </div>
+      {status ? <p className="xpath-status">{status}</p> : null}
+    </section>
+  );
+}
+
+function RssHubSettingsCard({
+  disabled,
+  onAddInstance,
+  onCheckInstance,
+  onGlobalInstanceChange,
+  settings,
+  status,
+}: {
+  disabled: boolean;
+  onAddInstance: (name: string, baseUrl: string) => void;
+  onCheckInstance: (baseUrl: string) => void;
+  onGlobalInstanceChange: (instanceId: string) => void;
+  settings: RssHubSettings;
+  status: string | null;
+}) {
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const globalInstance =
+    settings.instances.find((instance) => instance.id === settings.globalInstanceId) ??
+    settings.instances[0];
+
+  return (
+    <article className="settings-card rsshub-settings-card">
+      <div className="panel-heading">
+        <span>RSSHub</span>
+        <span>{globalInstance?.name ?? "Not configured"}</span>
+      </div>
+      <label className="selector-input">
+        <span>Global instance</span>
+        <select
+          disabled={disabled}
+          onChange={(event) => onGlobalInstanceChange(event.currentTarget.value)}
+          value={settings.globalInstanceId}
+        >
+          {settings.instances.map((instance) => (
+            <option key={instance.id} value={instance.id}>
+              {instance.name} · {instance.baseUrl}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="rsshub-instance-list">
+        {settings.instances.map((instance) => (
+          <div className="rsshub-instance-row" key={instance.id}>
+            <div>
+              <strong>{instance.name}</strong>
+              <span>{instance.baseUrl}</span>
+            </div>
+            <button disabled={disabled} onClick={() => onCheckInstance(instance.baseUrl)} type="button">
+              Check
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="rsshub-custom-instance">
+        <input
+          disabled={disabled}
+          onChange={(event) => setName(event.currentTarget.value)}
+          placeholder="Custom name"
+          value={name}
+        />
+        <input
+          disabled={disabled}
+          onChange={(event) => setBaseUrl(event.currentTarget.value)}
+          placeholder="https://rsshub.example.com"
+          value={baseUrl}
+        />
+        <button
+          disabled={disabled || !baseUrl.trim()}
+          onClick={() => {
+            onAddInstance(name, baseUrl);
+            setName("");
+            setBaseUrl("");
+          }}
+          type="button"
+        >
+          Add
+        </button>
+      </div>
+      {status ? <p className="xpath-status">{status}</p> : null}
+    </article>
+  );
+}
+
 function EntryLayoutControl({
   layout,
   onChange,
@@ -3141,8 +3578,10 @@ function SourceDetailPanel({
   onSaveXPath,
   onSetCategory,
   onSetRefreshInterval,
+  onSetRssHubInstance,
   onStartXPathEdit,
   onXPathSelectorsChange,
+  rssHubSettings,
   source,
 }: {
   editXPathPreview: XPathPreview | null;
@@ -3159,11 +3598,14 @@ function SourceDetailPanel({
   onSaveXPath: () => void;
   onSetCategory: (sourceId: number, category: string) => void;
   onSetRefreshInterval: (sourceId: number, seconds: number | null) => void;
+  onSetRssHubInstance: (sourceId: number, instanceId: string | null) => void;
   onStartXPathEdit: () => void;
   onXPathSelectorsChange: (selectors: XPathSelectors) => void;
+  rssHubSettings: RssHubSettings;
   source: Source;
 }) {
   const selectors = source.kind === "xpath" ? readXPathSelectorsFromSource(source) : null;
+  const rssHubConfig = source.kind === "rsshub" ? readRssHubConfigFromSource(source) : null;
 
   return (
     <article className="source-detail page-panel">
@@ -3237,6 +3679,29 @@ function SourceDetailPanel({
                 ))}
               </select>
             </dd>
+            {source.kind === "rsshub" ? (
+              <>
+                <dt>RSSHub route</dt>
+                <dd>{rssHubConfig?.route ?? source.url}</dd>
+                <dt>RSSHub instance</dt>
+                <dd>
+                  <select
+                    value={rssHubConfig?.instanceId ?? ""}
+                    onChange={(event) =>
+                      onSetRssHubInstance(source.id, event.currentTarget.value || null)
+                    }
+                    style={{ fontSize: "0.85rem" }}
+                  >
+                    <option value="">Inherit global ({rssHubGlobalName(rssHubSettings)})</option>
+                    {rssHubSettings.instances.map((instance) => (
+                      <option key={instance.id} value={instance.id}>
+                        {instance.name}
+                      </option>
+                    ))}
+                  </select>
+                </dd>
+              </>
+            ) : null}
           </dl>
           {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
         </div>
@@ -3751,6 +4216,9 @@ function viewLabel(mode: ViewMode): string {
 }
 
 function sourceInputModeLabel(mode: SourceInputMode): string {
+  if (mode === "rsshub") {
+    return "RSSHub";
+  }
   if (mode === "xpath") {
     return "XPath";
   }
@@ -3758,6 +4226,9 @@ function sourceInputModeLabel(mode: SourceInputMode): string {
 }
 
 function sourceInputModeKind(mode: SourceInputMode): string {
+  if (mode === "rsshub") {
+    return "Route";
+  }
   if (mode === "xpath") {
     return "Declarative";
   }
@@ -4236,6 +4707,28 @@ function readXPathSelectorsFromSource(source: Source): XPathSelectors {
   } catch {
     return defaultXPathSelectors;
   }
+}
+
+function readRssHubConfigFromSource(source: Source): RssHubSourceConfig | null {
+  if (!source.configJson) {
+    return { route: source.url };
+  }
+  try {
+    const config = JSON.parse(source.configJson) as RssHubSourceConfig;
+    return {
+      route: config.route?.trim() || source.url,
+      instanceId: config.instanceId || null,
+    };
+  } catch {
+    return { route: source.url };
+  }
+}
+
+function rssHubGlobalName(settings: RssHubSettings): string {
+  return (
+    settings.instances.find((instance) => instance.id === settings.globalInstanceId)?.name ??
+    "global"
+  );
 }
 
 function emptyToUndefined(value?: string): string | undefined {

@@ -84,12 +84,14 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
 button:disabled,
-input:disabled {
+input:disabled,
+select:disabled {
   cursor: not-allowed;
   opacity: 0.58;
 }
@@ -451,6 +453,7 @@ input:disabled {
 }
 
 .feed-form input,
+.feed-form select,
 .rename-form input,
 .category-picker input,
 .selector-input input,
@@ -474,6 +477,7 @@ input:disabled {
 }
 
 .feed-form input:focus,
+.feed-form select:focus,
 .rename-form input:focus,
 .category-picker input:focus,
 .selector-input input:focus,
@@ -490,6 +494,79 @@ input:disabled {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-panel-soft);
+}
+
+.rsshub-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
+}
+
+.rsshub-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.rsshub-form label > span,
+.preference-field > span {
+  color: var(--color-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.rsshub-instance-summary {
+  align-items: center;
+}
+
+.rsshub-instance-summary button,
+.rsshub-instance-row button,
+.rsshub-custom-instance button {
+  min-height: 30px;
+}
+
+.rsshub-instance-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.rsshub-instance-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--color-panel-soft);
+}
+
+.rsshub-instance-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rsshub-instance-row strong,
+.rsshub-instance-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rsshub-instance-row span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.rsshub-custom-instance {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  gap: 6px;
 }
 
 .selector-input {
@@ -660,6 +737,22 @@ input:disabled {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+.preference-field {
+  display: grid;
+  gap: 4px;
+}
+
+.preference-field select,
+.rsshub-custom-instance input {
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--color-text);
+  background: var(--color-panel-strong);
 }
 
 .feed-row .feed-item {
@@ -2375,6 +2468,10 @@ input:focus-visible,
   .source-detail-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .rsshub-custom-instance {
+    grid-template-columns: 1fr;
   }
 
   .topbar,

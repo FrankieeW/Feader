@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Canonical source kinds persisted in the database.
 pub const SOURCE_KIND_RSS: &str = "rss";
+pub const SOURCE_KIND_RSSHUB: &str = "rsshub";
 pub const SOURCE_KIND_XPATH: &str = "xpath";
 pub const SOURCE_KIND_JSON_API: &str = "json-api";
 
@@ -60,6 +61,70 @@ pub struct Article {
 pub struct AddSourceRequest {
     pub url: String,
     pub title: Option<String>,
+}
+
+/// A known or user-added RSSHub instance.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RssHubInstance {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub maintainer: String,
+    pub location: Option<String>,
+    pub official: bool,
+    pub builtin: bool,
+}
+
+/// RSSHub instance preferences exposed to the renderer.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RssHubSettings {
+    pub global_instance_id: String,
+    pub instances: Vec<RssHubInstance>,
+}
+
+/// Source-level RSSHub route configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RssHubSourceConfig {
+    pub route: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+}
+
+/// Request body for adding an RSSHub route source.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRssHubSourceRequest {
+    pub route: String,
+    pub title: Option<String>,
+    pub instance_id: Option<String>,
+}
+
+/// Request body for adding a custom RSSHub instance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRssHubInstanceRequest {
+    pub name: String,
+    pub base_url: String,
+}
+
+/// Request body for changing a source-level RSSHub instance override.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateRssHubSourceInstanceRequest {
+    pub source_id: i64,
+    pub instance_id: Option<String>,
+}
+
+/// Result of probing an RSSHub instance.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RssHubInstanceCheck {
+    pub ok: bool,
+    pub message: String,
+    pub checked_url: String,
 }
 
 /// Request body for creating a SIWE wallet login challenge.

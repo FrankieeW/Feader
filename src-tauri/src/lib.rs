@@ -4,9 +4,9 @@ mod ai;
 pub mod cli;
 mod db;
 mod feed_adapter;
+mod json_adapter;
 mod models;
 mod plugin_registry;
-mod json_adapter;
 mod xpath_adapter;
 
 use std::fs;
@@ -14,13 +14,15 @@ use std::fs;
 use db::AppDatabase;
 use hex::FromHex;
 use models::{
-    AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
-    AutoRefreshConfig, CreateWalletLoginChallengeRequest, CredentialCheck, PluginCredential,
-    PreviewXPathSourceRequest, RefreshTickEvent, RegistryIndex, Source,
-    SourceRefreshResult, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
+    AddRssHubInstanceRequest, AddRssHubSourceRequest, AddSourceRequest, AddXPathSourceRequest,
+    AiSettings, AiSettingsInput, Article, ArticleFilter, AutoRefreshConfig,
+    CreateWalletLoginChallengeRequest, CredentialCheck, PluginCredential,
+    PreviewXPathSourceRequest, RefreshTickEvent, RegistryIndex, RssHubInstance,
+    RssHubInstanceCheck, RssHubSettings, RssHubSourceConfig, Source, SourceRefreshResult,
+    UpdateRssHubSourceInstanceRequest, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
     VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack,
-    SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_XPATH,
-    XPathSelectors, XPathSourceSuggestion,
+    XPathSelectors, XPathSourceSuggestion, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS,
+    SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use std::sync::Arc;
@@ -140,15 +142,22 @@ async fn check_plugin_credential(
     if cookie.is_none() {
         return Err("尚未设置该插件的 cookie".to_string());
     }
-    let (ok, message) =
-        xpath_adapter::check_login_state(check_url.trim(), cookie.as_deref(), logged_in_xpath.trim())
-            .await?;
+    let (ok, message) = xpath_adapter::check_login_state(
+        check_url.trim(),
+        cookie.as_deref(),
+        logged_in_xpath.trim(),
+    )
+    .await?;
     database.record_plugin_credential_check(&plugin_id, ok, &message)?;
     let checked_at = database
         .get_plugin_credential(&plugin_id)?
         .last_checked_at
         .unwrap_or_default();
-    Ok(CredentialCheck { ok, message, checked_at })
+    Ok(CredentialCheck {
+        ok,
+        message,
+        checked_at,
+    })
 }
 
 /// Return bundled static XPath plugin packs.
@@ -158,6 +167,8 @@ fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
 }
 
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
+const RSSHUB_SETTINGS_KEY: &str = "rsshub_settings";
+const RSSHUB_DEFAULT_INSTANCE_ID: &str = "rsshub-rssforever";
 
 /// Fetch the plugin registry from the remote FeaderHub repository.
 /// Results are cached locally with a 24-hour TTL.
@@ -244,6 +255,270 @@ fn registry_cache_is_usable(index: &RegistryIndex) -> bool {
         })
 }
 
+fn builtin_rsshub_instances() -> Vec<RssHubInstance> {
+    vec![
+        RssHubInstance {
+            id: "rsshub-app".to_string(),
+            name: "RSSHub Official".to_string(),
+            base_url: "https://rsshub.app".to_string(),
+            maintainer: "DIYgod".to_string(),
+            location: Some("US".to_string()),
+            official: true,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: RSSHUB_DEFAULT_INSTANCE_ID.to_string(),
+            name: "RSSForever".to_string(),
+            base_url: "https://rsshub.rssforever.com".to_string(),
+            maintainer: "Stille".to_string(),
+            location: Some("AE".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "hub-slarker".to_string(),
+            name: "Slarker".to_string(),
+            base_url: "https://hub.slarker.me".to_string(),
+            maintainer: "Slarker".to_string(),
+            location: Some("US".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "rsshub-pseudoyu".to_string(),
+            name: "pseudoyu".to_string(),
+            base_url: "https://rsshub.pseudoyu.com".to_string(),
+            maintainer: "pseudoyu".to_string(),
+            location: Some("FR".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "rsshub-rss-tips".to_string(),
+            name: "AboutRSS".to_string(),
+            base_url: "https://rsshub.rss.tips".to_string(),
+            maintainer: "AboutRSS".to_string(),
+            location: Some("US".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "rsshub-ktachibana".to_string(),
+            name: "KTachibanaM".to_string(),
+            base_url: "https://rsshub.ktachibana.party".to_string(),
+            maintainer: "KTachibanaM".to_string(),
+            location: Some("US".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "rss-owo".to_string(),
+            name: "rss.owo.nz".to_string(),
+            base_url: "https://rss.owo.nz".to_string(),
+            maintainer: "Vincent Yang".to_string(),
+            location: Some("DE".to_string()),
+            official: false,
+            builtin: true,
+        },
+        RssHubInstance {
+            id: "rsshub-wudifeixue".to_string(),
+            name: "wudifeixue".to_string(),
+            base_url: "https://rss.wudifeixue.com".to_string(),
+            maintainer: "wudifeixue".to_string(),
+            location: Some("CA".to_string()),
+            official: false,
+            builtin: true,
+        },
+    ]
+}
+
+fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings, String> {
+    let mut settings = database
+        .get_setting(RSSHUB_SETTINGS_KEY)?
+        .and_then(|json| serde_json::from_str::<RssHubSettings>(&json).ok())
+        .unwrap_or_else(|| RssHubSettings {
+            global_instance_id: RSSHUB_DEFAULT_INSTANCE_ID.to_string(),
+            instances: Vec::new(),
+        });
+
+    let mut instances = builtin_rsshub_instances();
+    for instance in settings
+        .instances
+        .drain(..)
+        .filter(|instance| !instance.builtin)
+    {
+        if !instances.iter().any(|item| item.id == instance.id) {
+            instances.push(instance);
+        }
+    }
+    if !instances
+        .iter()
+        .any(|instance| instance.id == settings.global_instance_id)
+    {
+        settings.global_instance_id = RSSHUB_DEFAULT_INSTANCE_ID.to_string();
+    }
+    settings.instances = instances;
+    Ok(settings)
+}
+
+fn save_rsshub_settings(database: &AppDatabase, settings: &RssHubSettings) -> Result<(), String> {
+    let json = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    database.set_setting(RSSHUB_SETTINGS_KEY, &json)
+}
+
+fn normalize_rsshub_base_url(base_url: &str) -> Result<String, String> {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err("RSSHub instance URL is required".to_string());
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("RSSHub instance URL must start with http:// or https://".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_rsshub_route(route: &str) -> Result<String, String> {
+    let trimmed = route.trim();
+    if trimmed.is_empty() {
+        return Err("RSSHub route is required".to_string());
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let parsed = url::Url::parse(trimmed).map_err(|error| error.to_string())?;
+        let mut route = parsed.path().to_string();
+        if let Some(query) = parsed.query() {
+            route.push('?');
+            route.push_str(query);
+        }
+        return normalize_rsshub_route(&route);
+    }
+    Ok(format!("/{}", trimmed.trim_start_matches('/')))
+}
+
+fn rsshub_instance_id_from_base(base_url: &str) -> String {
+    base_url
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn build_rsshub_url(instance: &RssHubInstance, route: &str) -> Result<String, String> {
+    Ok(format!(
+        "{}{}",
+        normalize_rsshub_base_url(&instance.base_url)?,
+        normalize_rsshub_route(route)?
+    ))
+}
+
+fn resolve_rsshub_instance(
+    database: &AppDatabase,
+    instance_id: Option<&str>,
+) -> Result<RssHubInstance, String> {
+    let settings = load_rsshub_settings(database)?;
+    let selected_id = instance_id
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&settings.global_instance_id);
+    settings
+        .instances
+        .into_iter()
+        .find(|instance| instance.id == selected_id)
+        .ok_or_else(|| format!("RSSHub instance '{selected_id}' is not configured"))
+}
+
+/// Return configured RSSHub instances and the global default.
+#[tauri::command]
+fn get_rsshub_settings(database: tauri::State<'_, AppDatabase>) -> Result<RssHubSettings, String> {
+    load_rsshub_settings(&database)
+}
+
+/// Set the global RSSHub instance used by sources without their own override.
+#[tauri::command]
+fn set_rsshub_global_instance(
+    instance_id: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<RssHubSettings, String> {
+    let mut settings = load_rsshub_settings(&database)?;
+    if !settings
+        .instances
+        .iter()
+        .any(|instance| instance.id == instance_id)
+    {
+        return Err("RSSHub instance is not configured".to_string());
+    }
+    settings.global_instance_id = instance_id;
+    save_rsshub_settings(&database, &settings)?;
+    load_rsshub_settings(&database)
+}
+
+/// Add a custom RSSHub instance to the selectable list.
+#[tauri::command]
+fn add_rsshub_instance(
+    request: AddRssHubInstanceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<RssHubSettings, String> {
+    let base_url = normalize_rsshub_base_url(&request.base_url)?;
+    let id = rsshub_instance_id_from_base(&base_url);
+    let mut settings = load_rsshub_settings(&database)?;
+    if settings.instances.iter().any(|instance| instance.id == id) {
+        return Err("RSSHub instance already exists".to_string());
+    }
+    let custom_name = request.name.trim();
+    let name = if custom_name.is_empty() {
+        base_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .to_string()
+    } else {
+        custom_name.to_string()
+    };
+    settings.instances.push(RssHubInstance {
+        id,
+        name,
+        base_url,
+        maintainer: "Custom".to_string(),
+        location: None,
+        official: false,
+        builtin: false,
+    });
+    save_rsshub_settings(&database, &settings)?;
+    load_rsshub_settings(&database)
+}
+
+/// Probe an RSSHub instance health endpoint.
+#[tauri::command]
+async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceCheck, String> {
+    let base_url = normalize_rsshub_base_url(&base_url)?;
+    let checked_url = format!("{base_url}/healthz");
+    let response = reqwest::Client::new()
+        .get(&checked_url)
+        .header("user-agent", "Feader/0.1")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    Ok(RssHubInstanceCheck {
+        ok: status.is_success(),
+        message: if status.is_success() {
+            format!("RSSHub health check passed with status {status}")
+        } else {
+            format!("RSSHub health check returned status {status}")
+        },
+        checked_url,
+    })
+}
+
 /// Suggest XPath selectors for a page using the configured AI provider.
 #[tauri::command]
 async fn suggest_xpath_source(
@@ -303,6 +578,61 @@ async fn add_source(
     database.get_source(source.id)
 }
 
+/// Add an RSSHub route source after validating that the selected instance returns a feed.
+#[tauri::command]
+async fn add_rsshub_source(
+    request: AddRssHubSourceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    let route = normalize_rsshub_route(&request.route)?;
+    let instance = resolve_rsshub_instance(&database, request.instance_id.as_deref())?;
+    let feed_url = build_rsshub_url(&instance, &route)?;
+    let feed = feed_adapter::fetch_feed(&feed_url).await?;
+    let config = RssHubSourceConfig {
+        route: route.clone(),
+        instance_id: request
+            .instance_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.to_string()),
+    };
+    let source = database.add_rsshub_source(
+        &route,
+        request
+            .title
+            .as_deref()
+            .or(feed.title.as_deref())
+            .filter(|title| !title.trim().is_empty()),
+        &config,
+    )?;
+    database.upsert_articles(source.id, feed.title.as_deref(), &feed.articles)?;
+    database.get_source(source.id)
+}
+
+/// Update the RSSHub instance override for one source.
+#[tauri::command]
+fn update_rsshub_source_instance(
+    request: UpdateRssHubSourceInstanceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    let source = database.get_source(request.source_id)?;
+    if source.kind != SOURCE_KIND_RSSHUB {
+        return Err("RSSHub instance can only be changed for RSSHub sources".to_string());
+    }
+    let mut config = parse_rsshub_source_config(&source)?;
+    if let Some(instance_id) = request
+        .instance_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        resolve_rsshub_instance(&database, Some(instance_id))?;
+        config.instance_id = Some(instance_id.to_string());
+    } else {
+        config.instance_id = None;
+    }
+    database.update_rsshub_source_config(source.id, &config)
+}
+
 /// Preview extracted articles for a declarative XPath source.
 #[tauri::command]
 async fn preview_xpath_source(
@@ -328,8 +658,7 @@ async fn preview_json_api_source(
         return Err("JSON feed URL is required".to_string());
     }
     let cookie = resolve_json_cookie(&database, &request.selectors);
-    let feed =
-        json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
+    let feed = json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
     Ok(XPathPreview {
         articles: feed.articles,
         diagnostics: Vec::new(),
@@ -379,8 +708,7 @@ async fn add_json_api_source(
     }
 
     let cookie = resolve_json_cookie(&database, &request.selectors);
-    let feed =
-        json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
+    let feed = json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
     if feed.articles.is_empty() {
         return Err("JSON selectors did not extract any articles".to_string());
     }
@@ -533,6 +861,12 @@ fn mark_articles_read(
 async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Result<usize, String> {
     let feed = match source.kind.as_str() {
         SOURCE_KIND_RSS => feed_adapter::fetch_feed(&source.url).await,
+        SOURCE_KIND_RSSHUB => {
+            let config = parse_rsshub_source_config(source)?;
+            let instance = resolve_rsshub_instance(database, config.instance_id.as_deref())?;
+            let url = build_rsshub_url(&instance, &config.route)?;
+            feed_adapter::fetch_feed(&url).await
+        }
         SOURCE_KIND_XPATH => {
             let selectors = apply_plugin_cookie(database, parse_xpath_selectors(source)?);
             xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
@@ -548,7 +882,8 @@ async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Resul
     match feed {
         Ok(feed) => {
             let article_count = feed.articles.len();
-            let source_title = (source.kind == SOURCE_KIND_RSS)
+            let source_title = (source.kind == SOURCE_KIND_RSS
+                || source.kind == SOURCE_KIND_RSSHUB)
                 .then_some(feed.title.as_deref())
                 .flatten();
             database.upsert_articles(source.id, source_title, &feed.articles)?;
@@ -559,6 +894,14 @@ async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Resul
             Err(error)
         }
     }
+}
+
+fn parse_rsshub_source_config(source: &Source) -> Result<RssHubSourceConfig, String> {
+    let config = source
+        .config_json
+        .as_deref()
+        .ok_or_else(|| format!("RSSHub source '{}' has no route config", source.title))?;
+    serde_json::from_str(config).map_err(|error| error.to_string())
 }
 
 fn parse_xpath_selectors(source: &Source) -> Result<XPathSelectors, String> {
@@ -581,17 +924,12 @@ fn resolve_json_cookie(database: &AppDatabase, selectors: &XPathSelectors) -> Op
 }
 
 fn apply_plugin_cookie(database: &AppDatabase, mut selectors: XPathSelectors) -> XPathSelectors {
-    let plugin_id = selectors
-        .plugin
-        .as_ref()
-        .map(|plugin| plugin.id.clone());
+    let plugin_id = selectors.plugin.as_ref().map(|plugin| plugin.id.clone());
     let plugin_cookie = plugin_id
         .as_deref()
         .and_then(|id| database.raw_plugin_cookie(id).ok().flatten());
-    selectors.cookie = xpath_adapter::resolve_cookie(
-        selectors.cookie.as_deref(),
-        plugin_cookie.as_deref(),
-    );
+    selectors.cookie =
+        xpath_adapter::resolve_cookie(selectors.cookie.as_deref(), plugin_cookie.as_deref());
     selectors
 }
 
@@ -645,9 +983,8 @@ impl RefreshScheduler {
         let global_interval = self.global_interval.clone();
 
         tauri::async_runtime::spawn(async move {
-            let mut tick = tokio::time::interval(
-                std::time::Duration::from_secs(SCHEDULER_TICK_SECONDS),
-            );
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(SCHEDULER_TICK_SECONDS));
             loop {
                 tokio::select! {
                     _ = tick.tick() => {}
@@ -679,38 +1016,46 @@ impl RefreshScheduler {
                         break;
                     }
 
-                    let _ = app_handle.emit("refresh-tick", RefreshTickEvent {
-                        refreshing: true,
-                        current_source_id: Some(source.id),
-                        current_source_title: Some(source.title.clone()),
-                        next_refresh_at: None,
-                        sources_checked: total_due,
-                        sources_refreshed: i,
-                    });
+                    let _ = app_handle.emit(
+                        "refresh-tick",
+                        RefreshTickEvent {
+                            refreshing: true,
+                            current_source_id: Some(source.id),
+                            current_source_title: Some(source.title.clone()),
+                            next_refresh_at: None,
+                            sources_checked: total_due,
+                            sources_refreshed: i,
+                        },
+                    );
 
                     let _ = refresh_source_record(database.inner(), source).await;
 
-                    let _ = app_handle.emit("refresh-tick", RefreshTickEvent {
-                        refreshing: true,
-                        current_source_id: Some(source.id),
-                        current_source_title: Some(source.title.clone()),
-                        next_refresh_at: None,
-                        sources_checked: total_due,
-                        sources_refreshed: i + 1,
-                    });
+                    let _ = app_handle.emit(
+                        "refresh-tick",
+                        RefreshTickEvent {
+                            refreshing: true,
+                            current_source_id: Some(source.id),
+                            current_source_title: Some(source.title.clone()),
+                            next_refresh_at: None,
+                            sources_checked: total_due,
+                            sources_refreshed: i + 1,
+                        },
+                    );
                 }
 
                 // Compute approximate next refresh time.
-                let next_at = now
-                    + chrono::Duration::seconds(std::cmp::max(global, 60));
-                let _ = app_handle.emit("refresh-tick", RefreshTickEvent {
-                    refreshing: false,
-                    current_source_id: None,
-                    current_source_title: None,
-                    next_refresh_at: Some(next_at.to_rfc3339()),
-                    sources_checked: total_due,
-                    sources_refreshed: total_due,
-                });
+                let next_at = now + chrono::Duration::seconds(std::cmp::max(global, 60));
+                let _ = app_handle.emit(
+                    "refresh-tick",
+                    RefreshTickEvent {
+                        refreshing: false,
+                        current_source_id: None,
+                        current_source_title: None,
+                        next_refresh_at: Some(next_at.to_rfc3339()),
+                        sources_checked: total_due,
+                        sources_refreshed: total_due,
+                    },
+                );
             }
         });
     }
@@ -729,7 +1074,12 @@ impl RefreshScheduler {
     }
 }
 
-fn is_source_due(source: &Source, now: chrono::DateTime<chrono::Utc>, global: i64, database: &AppDatabase) -> bool {
+fn is_source_due(
+    source: &Source,
+    now: chrono::DateTime<chrono::Utc>,
+    global: i64,
+    database: &AppDatabase,
+) -> bool {
     let effective = effective_refresh_interval(source, global, database);
     match &source.last_fetched_at {
         Some(ts) => {
@@ -773,6 +1123,51 @@ fn extract_plugin_id(source: &Source) -> Option<String> {
         .get("id")?
         .as_str()
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rsshub_route_normalization_accepts_paths_and_full_urls() {
+        assert_eq!(
+            normalize_rsshub_route("github/trending/daily/rust").unwrap(),
+            "/github/trending/daily/rust"
+        );
+        assert_eq!(
+            normalize_rsshub_route("https://rsshub.app/bilibili/user/video/123?limit=10").unwrap(),
+            "/bilibili/user/video/123?limit=10"
+        );
+    }
+
+    #[test]
+    fn rsshub_settings_merge_builtin_and_custom_instances() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let mut settings = load_rsshub_settings(&database).expect("settings load");
+        settings.instances.push(RssHubInstance {
+            id: "custom-example".to_string(),
+            name: "Custom Example".to_string(),
+            base_url: "https://rsshub.example.com".to_string(),
+            maintainer: "Custom".to_string(),
+            location: None,
+            official: false,
+            builtin: false,
+        });
+        settings.global_instance_id = "custom-example".to_string();
+        save_rsshub_settings(&database, &settings).expect("settings save");
+
+        let reloaded = load_rsshub_settings(&database).expect("settings reload");
+        assert_eq!(reloaded.global_instance_id, "custom-example");
+        assert!(reloaded
+            .instances
+            .iter()
+            .any(|instance| instance.id == RSSHUB_DEFAULT_INSTANCE_ID));
+        assert!(reloaded
+            .instances
+            .iter()
+            .any(|instance| instance.id == "custom-example" && !instance.builtin));
+    }
 }
 
 // ── Auto-refresh Tauri commands ────────────────────────────────────
@@ -850,7 +1245,10 @@ async fn set_auto_refresh_enabled(
     scheduler: tauri::State<'_, RefreshScheduler>,
     app_handle: tauri::AppHandle,
 ) -> Result<AutoRefreshConfig, String> {
-    database.set_setting("auto_refresh_enabled", if enabled { "true" } else { "false" })?;
+    database.set_setting(
+        "auto_refresh_enabled",
+        if enabled { "true" } else { "false" },
+    )?;
     scheduler.set_enabled(enabled).await;
     if enabled {
         scheduler.start(app_handle.clone()).await;
@@ -926,10 +1324,16 @@ pub fn run() {
             get_plugin_credential,
             set_plugin_credential,
             check_plugin_credential,
+            get_rsshub_settings,
+            set_rsshub_global_instance,
+            add_rsshub_instance,
+            check_rsshub_instance,
             list_xpath_plugin_packs,
             fetch_registry_packs,
             suggest_xpath_source,
             add_source,
+            add_rsshub_source,
+            update_rsshub_source_instance,
             preview_xpath_source,
             preview_json_api_source,
             add_xpath_source,

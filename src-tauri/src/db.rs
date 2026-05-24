@@ -8,8 +8,8 @@ use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
-    PluginRefreshOverride, Source, WalletLoginChallenge, WalletSession, XPathSelectors,
-    SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_XPATH,
+    PluginRefreshOverride, RssHubSourceConfig, Source, WalletLoginChallenge, WalletSession,
+    XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -51,6 +51,17 @@ impl AppDatabase {
         self.add_source_with_kind(SOURCE_KIND_RSS, url, title, None)
     }
 
+    /// Insert an RSSHub route source and persist its selected instance override.
+    pub fn add_rsshub_source(
+        &self,
+        route: &str,
+        title: Option<&str>,
+        config: &RssHubSourceConfig,
+    ) -> Result<Source, String> {
+        let config_json = serde_json::to_string(config).map_err(|error| error.to_string())?;
+        self.add_source_with_kind(SOURCE_KIND_RSSHUB, route, title, Some(&config_json))
+    }
+
     /// Insert an XPath source and persist its selector configuration.
     pub fn add_xpath_source(
         &self,
@@ -69,8 +80,8 @@ impl AppDatabase {
         title: &str,
         selectors: &XPathSelectors,
     ) -> Result<Source, String> {
-        let config_json =
-            serde_json::to_string(selectors).map_err(|e| format!("Serialize JSON selectors: {e}"))?;
+        let config_json = serde_json::to_string(selectors)
+            .map_err(|e| format!("Serialize JSON selectors: {e}"))?;
         self.add_source_with_kind(SOURCE_KIND_JSON_API, url, Some(title), Some(&config_json))
     }
 
@@ -380,8 +391,7 @@ impl AppDatabase {
         Ok(PluginCredential {
             plugin_id: plugin_id.to_string(),
             cookie_set: !trimmed.is_empty(),
-            cookie_reference: crate::models::is_env_reference(trimmed)
-                .then(|| trimmed.to_string()),
+            cookie_reference: crate::models::is_env_reference(trimmed).then(|| trimmed.to_string()),
             updated_at,
             last_checked_at,
             last_check_ok: last_check_ok.map(|value| value != 0),
@@ -528,6 +538,31 @@ impl AppDatabase {
             .map_err(|error| error.to_string())?;
         if updated == 0 {
             return Err("XPath source not found".to_string());
+        }
+        get_source_with_connection(&connection, source_id)
+    }
+
+    /// Replace the persisted RSSHub route configuration for an RSSHub source.
+    pub fn update_rsshub_source_config(
+        &self,
+        source_id: i64,
+        config: &RssHubSourceConfig,
+    ) -> Result<Source, String> {
+        let config_json = serde_json::to_string(config).map_err(|error| error.to_string())?;
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let updated = connection
+            .execute(
+                "
+                UPDATE sources
+                SET config_json = ?1, last_error = NULL, updated_at = ?2
+                WHERE id = ?3 AND kind = 'rsshub'
+                ",
+                params![config_json, now, source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if updated == 0 {
+            return Err("RSSHub source not found".to_string());
         }
         get_source_with_connection(&connection, source_id)
     }
@@ -809,11 +844,7 @@ impl AppDatabase {
     }
 
     /// Upsert a plugin-level refresh interval override.
-    pub fn set_plugin_refresh_interval(
-        &self,
-        plugin_id: &str,
-        seconds: i64,
-    ) -> Result<(), String> {
+    pub fn set_plugin_refresh_interval(&self, plugin_id: &str, seconds: i64) -> Result<(), String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
         connection
             .execute(
@@ -843,9 +874,7 @@ impl AppDatabase {
     }
 
     /// List all plugin refresh overrides with display names derived from source configs.
-    pub fn list_plugin_refresh_overrides(
-        &self,
-    ) -> Result<Vec<PluginRefreshOverride>, String> {
+    pub fn list_plugin_refresh_overrides(&self) -> Result<Vec<PluginRefreshOverride>, String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
         let mut statement = connection
             .prepare(
@@ -867,16 +896,20 @@ impl AppDatabase {
 
         // Fill in plugin names by looking at source configs.
         for ov in &mut overrides {
-            if let Ok(name) = connection.query_row(
-                "SELECT s.config_json FROM sources s
+            if let Ok(name) = connection
+                .query_row(
+                    "SELECT s.config_json FROM sources s
                  WHERE json_extract(s.config_json, '$.plugin.id') = ?1
                  LIMIT 1",
-                params![ov.plugin_id],
-                |row| {
-                    let config: String = row.get(0)?;
-                    Ok(config)
-                },
-            ).optional().map_err(|e| e.to_string()) {
+                    params![ov.plugin_id],
+                    |row| {
+                        let config: String = row.get(0)?;
+                        Ok(config)
+                    },
+                )
+                .optional()
+                .map_err(|e| e.to_string())
+            {
                 if let Some(config) = name {
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&config) {
                         if let Some(name) = parsed["plugin"]["name"].as_str() {
@@ -1298,28 +1331,45 @@ mod tests {
     fn plugin_credential_round_trip_and_masking() {
         let db = AppDatabase::in_memory().expect("open db");
         // unset → cookie_set false
-        let empty = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        let empty = db
+            .get_plugin_credential("official.naixi-forum.xpath")
+            .unwrap();
         assert!(!empty.cookie_set);
 
-        db.set_plugin_credential("official.naixi-forum.xpath", "sid=abc; uid=1").unwrap();
-        let saved = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        db.set_plugin_credential("official.naixi-forum.xpath", "sid=abc; uid=1")
+            .unwrap();
+        let saved = db
+            .get_plugin_credential("official.naixi-forum.xpath")
+            .unwrap();
         assert!(saved.cookie_set);
         assert_eq!(saved.cookie_reference, None); // literal not echoed
-        assert_eq!(db.raw_plugin_cookie("official.naixi-forum.xpath").unwrap().as_deref(), Some("sid=abc; uid=1"));
+        assert_eq!(
+            db.raw_plugin_cookie("official.naixi-forum.xpath")
+                .unwrap()
+                .as_deref(),
+            Some("sid=abc; uid=1")
+        );
 
         // env reference is surfaced (not masked away)
-        db.set_plugin_credential("p2", "$FEADER_NAIXI_COOKIE").unwrap();
+        db.set_plugin_credential("p2", "$FEADER_NAIXI_COOKIE")
+            .unwrap();
         let envref = db.get_plugin_credential("p2").unwrap();
         assert!(envref.cookie_set);
-        assert_eq!(envref.cookie_reference.as_deref(), Some("$FEADER_NAIXI_COOKIE"));
+        assert_eq!(
+            envref.cookie_reference.as_deref(),
+            Some("$FEADER_NAIXI_COOKIE")
+        );
 
         // blank clears
         db.set_plugin_credential("p2", "").unwrap();
         assert!(!db.get_plugin_credential("p2").unwrap().cookie_set);
 
         // check recording
-        db.record_plugin_credential_check("official.naixi-forum.xpath", true, "已登录").unwrap();
-        let checked = db.get_plugin_credential("official.naixi-forum.xpath").unwrap();
+        db.record_plugin_credential_check("official.naixi-forum.xpath", true, "已登录")
+            .unwrap();
+        let checked = db
+            .get_plugin_credential("official.naixi-forum.xpath")
+            .unwrap();
         assert_eq!(checked.last_check_ok, Some(true));
         assert_eq!(checked.last_check_message.as_deref(), Some("已登录"));
         assert!(checked.last_checked_at.is_some());
