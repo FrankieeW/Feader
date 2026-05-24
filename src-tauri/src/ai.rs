@@ -8,6 +8,7 @@ use crate::models::{env_reference_name, AiSettings, XPathSelectors};
 use crate::xpath_adapter::is_valid_xpath;
 
 const AI_HTML_CHAR_CAP: usize = 12_000;
+const AI_OUTPUT_TOKEN_CAP: usize = 4096;
 const AI_REQUEST_TIMEOUT_SECONDS: u64 = 45;
 const AI_RESPONSE_SNIPPET_CAP: usize = 320;
 
@@ -53,6 +54,12 @@ fn keep_valid(value: Option<String>) -> Option<String> {
 /// Parse a model response (possibly wrapped in prose/code fences) into validated selectors.
 pub fn parse_selectors_json(text: &str) -> Result<XPathSelectors, String> {
     let json = extract_json_object(text).ok_or_else(|| {
+        if text.trim_start().starts_with('{') {
+            return format!(
+                "AI response JSON was incomplete. Response started with: {}",
+                response_snippet(text)
+            );
+        }
         format!(
             "AI response did not contain JSON. Response started with: {}",
             response_snippet(text)
@@ -87,6 +94,8 @@ fn build_prompt(html: &str) -> String {
          Required string keys: items, title, url, summary, publishedAt, author, content, image, nextPage.\n\
          Values must be XPath expressions or an empty string. `items` selects each repeating article node.\n\
          title/url/summary/publishedAt/author/content/image are relative to each item. nextPage is document-level.\n\
+         Keep selectors short and robust. Prefer one stable semantic/tag/class selector over long union expressions.\n\
+         Avoid absolute positional paths like /html/body/div[3]/div[2].\n\
          Do not use Markdown. Do not explain. Do not wrap in code fences.\n\n\
          Example output:\n\
          {{\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\"\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
@@ -124,7 +133,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
     let endpoint = format!("{}/v1/messages", settings.base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": &settings.model,
-        "max_tokens": 1024,
+        "max_tokens": AI_OUTPUT_TOKEN_CAP,
         "system": "Return only valid JSON for XPath selectors. No prose, no markdown.",
         "messages": [
             { "role": "user", "content": prompt },
@@ -161,6 +170,7 @@ async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<S
     let endpoint = format!("{}/chat/completions", settings.base_url.trim_end_matches('/'));
     let json_body = serde_json::json!({
         "model": &settings.model,
+        "max_tokens": AI_OUTPUT_TOKEN_CAP,
         "response_format": { "type": "json_object" },
         "messages": [
             { "role": "system", "content": "Return only valid JSON for XPath selectors. No prose, no markdown." },
@@ -172,6 +182,7 @@ async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<S
         Err(error) if error.contains("status 400") => {
             let plain_body = serde_json::json!({
                 "model": &settings.model,
+                "max_tokens": AI_OUTPUT_TOKEN_CAP,
                 "messages": [
                     { "role": "system", "content": "Return only valid JSON for XPath selectors. No prose, no markdown." },
                     { "role": "user", "content": prompt }
@@ -276,6 +287,12 @@ mod tests {
     fn reports_non_json_model_response_snippet() {
         let error = parse_selectors_json("I cannot inspect this page.").unwrap_err();
         assert!(error.contains("I cannot inspect this page."));
+    }
+
+    #[test]
+    fn reports_incomplete_json_response() {
+        let error = parse_selectors_json("{\"items\":\"//article\"").unwrap_err();
+        assert!(error.contains("JSON was incomplete"));
     }
 
     #[test]
