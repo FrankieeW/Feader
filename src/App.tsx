@@ -119,6 +119,18 @@ type XPathPreview = {
   nextPageUrl?: string | null;
 };
 
+type AiProvider = "anthropic" | "openai";
+
+type AiSettings = {
+  provider: AiProvider;
+  baseUrl: string;
+  model: string;
+  enabled: boolean;
+  apiKeySet: boolean;
+  apiKeyReference?: string | null;
+  updatedAt: string;
+};
+
 type WalletLoginChallenge = {
   nonce: string;
   domain: string;
@@ -179,6 +191,7 @@ const readerTypographyStorageKey = "feader.readerTypography";
 const feedGroupStorageKey = "feader.feedGroups";
 const categoryDatalistId = "feader-category-options";
 const builtInTestFeedUrl = "https://www.appinn.com/feed/";
+const aiDocsUrl = "https://github.com/FrankieeW/Feader/blob/main/docs/ai-configuration.md";
 const defaultPaneWidths: PaneWidths = {
   sidebar: 240,
   timeline: 520,
@@ -186,6 +199,16 @@ const defaultPaneWidths: PaneWidths = {
 const paneBounds: Record<PaneKey, { min: number; max: number }> = {
   sidebar: { min: 220, max: 300 },
   timeline: { min: 360, max: 620 },
+};
+
+const defaultAiSettings: AiSettings = {
+  provider: "openai",
+  baseUrl: "",
+  model: "",
+  enabled: false,
+  apiKeySet: false,
+  apiKeyReference: null,
+  updatedAt: "",
 };
 
 const testModeSources: Source[] = [
@@ -299,6 +322,7 @@ const testModeArticles: Article[] = [
 
 let testModeSourceState = testModeSources.map((source) => ({ ...source }));
 let testModeArticleState = testModeArticles.map((article) => ({ ...article }));
+let testModeAiSettings: AiSettings = { ...defaultAiSettings };
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauriRuntime()) {
@@ -378,6 +402,35 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       } as T;
     case "disconnect_wallet_login":
       return undefined as T;
+    case "get_ai_settings":
+      return testModeAiSettings as T;
+    case "set_ai_settings": {
+      const input = args?.input as
+        | {
+            provider?: AiProvider;
+            baseUrl?: string;
+            model?: string;
+            enabled?: boolean;
+            apiKey?: string | null;
+          }
+        | undefined;
+      const key = typeof input?.apiKey === "string" ? input.apiKey.trim() : "";
+      const hadKey = testModeAiSettings.apiKeySet;
+      testModeAiSettings = {
+        provider: input?.provider ?? testModeAiSettings.provider,
+        baseUrl: input?.baseUrl ?? "",
+        model: input?.model ?? "",
+        enabled: Boolean(input?.enabled),
+        apiKeySet: key.length > 0 ? true : hadKey,
+        apiKeyReference: key.startsWith("$")
+          ? key
+          : key.length > 0
+            ? null
+            : testModeAiSettings.apiKeyReference,
+        updatedAt: new Date().toISOString(),
+      };
+      return testModeAiSettings as T;
+    }
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
       const sourceId = Number(request?.sourceId);
@@ -440,6 +493,8 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       } as T;
     case "add_xpath_source":
       throw new Error("XPath test mode is read-only. Use the Tauri app to validate XPath sources.");
+    case "suggest_xpath_source":
+      throw new Error("AI suggestions require the Tauri app.");
     case "set_source_category": {
       const sourceId = Number(args?.sourceId);
       const rawCategory = typeof args?.category === "string" ? args.category.trim() : "";
@@ -565,6 +620,7 @@ function App() {
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
+  const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
@@ -595,6 +651,7 @@ function App() {
   useEffect(() => {
     void loadData();
     void loadWalletSession();
+    void loadAiSettings();
   }, []);
 
   useEffect(() => {
@@ -657,6 +714,25 @@ function App() {
   async function loadWalletSession(): Promise<void> {
     const session = await invoke<WalletSession | null>("get_wallet_session");
     setWalletSession(session);
+  }
+
+  async function loadAiSettings(): Promise<void> {
+    const settings = await invoke<AiSettings>("get_ai_settings");
+    setAiSettings(settings);
+  }
+
+  async function handleSaveAiSettings(input: {
+    provider: AiProvider;
+    baseUrl: string;
+    model: string;
+    enabled: boolean;
+    apiKey?: string;
+  }): Promise<void> {
+    await runTask("Saving AI settings", async () => {
+      const next = await invoke<AiSettings>("set_ai_settings", { input });
+      setAiSettings(next);
+      setStatus("AI settings saved");
+    });
   }
 
   async function handleConnectWallet(): Promise<void> {
@@ -1382,6 +1458,12 @@ function App() {
               walletAddress={walletAddress}
             />
 
+            <AiSettingsCard
+              disabled={isBusy}
+              onSave={(input) => void handleSaveAiSettings(input)}
+              settings={aiSettings}
+            />
+
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Workspace</span>
@@ -1595,6 +1677,120 @@ function ThemeControl({
         </button>
       ))}
     </div>
+  );
+}
+
+function AiSettingsCard({
+  settings,
+  disabled,
+  onSave,
+}: {
+  settings: AiSettings;
+  disabled: boolean;
+  onSave: (input: {
+    provider: AiProvider;
+    baseUrl: string;
+    model: string;
+    enabled: boolean;
+    apiKey?: string;
+  }) => void;
+}) {
+  const [provider, setProvider] = useState<AiProvider>(settings.provider);
+  const [baseUrl, setBaseUrl] = useState(settings.baseUrl);
+  const [model, setModel] = useState(settings.model);
+  const [enabled, setEnabled] = useState(settings.enabled);
+  const [apiKey, setApiKey] = useState("");
+
+  useEffect(() => {
+    setProvider(settings.provider);
+    setBaseUrl(settings.baseUrl);
+    setModel(settings.model);
+    setEnabled(settings.enabled);
+    setApiKey("");
+  }, [settings]);
+
+  return (
+    <article className="settings-card">
+      <div className="panel-heading">
+        <span>AI</span>
+        <span>{settings.enabled && settings.apiKeySet ? "Active" : "Off"}</span>
+      </div>
+      <form
+        className="ai-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave({ provider, baseUrl, model, enabled, apiKey: apiKey.trim() || undefined });
+        }}
+      >
+        <label className="selector-input">
+          <span>Provider</span>
+          <select
+            disabled={disabled}
+            onChange={(event) => setProvider(event.currentTarget.value as AiProvider)}
+            value={provider}
+          >
+            <option value="openai">OpenAI-compatible</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+        </label>
+        <label className="selector-input">
+          <span>Base URL</span>
+          <input
+            disabled={disabled}
+            onChange={(event) => setBaseUrl(event.currentTarget.value)}
+            placeholder={
+              provider === "anthropic" ? "https://api.anthropic.com" : "https://api.openai.com/v1"
+            }
+            value={baseUrl}
+          />
+        </label>
+        <label className="selector-input">
+          <span>Model</span>
+          <input
+            disabled={disabled}
+            onChange={(event) => setModel(event.currentTarget.value)}
+            placeholder={provider === "anthropic" ? "claude-haiku-4-5" : "gpt-4o-mini"}
+            value={model}
+          />
+        </label>
+        <label className="selector-input">
+          <span>API key {settings.apiKeySet ? "(set, blank keeps it)" : ""}</span>
+          <input
+            disabled={disabled}
+            onChange={(event) => setApiKey(event.currentTarget.value)}
+            placeholder="sk-... or $MY_API_KEY"
+            type="password"
+            value={apiKey}
+          />
+          {settings.apiKeyReference ? (
+            <small className="selector-hint">
+              Using environment reference {settings.apiKeyReference}
+            </small>
+          ) : settings.apiKeySet ? (
+            <small className="selector-hint">
+              Literal key is stored locally; leave blank to keep it.
+            </small>
+          ) : null}
+        </label>
+        <label className="ai-enable">
+          <input
+            checked={enabled}
+            disabled={disabled}
+            onChange={(event) => setEnabled(event.currentTarget.checked)}
+            type="checkbox"
+          />
+          <span>Enable AI features</span>
+        </label>
+        <div className="ai-actions">
+          <button className="primary-action" disabled={disabled} type="submit">
+            Save AI settings
+          </button>
+          <a href={aiDocsUrl} rel="noreferrer" target="_blank">
+            Configuration guide
+          </a>
+        </div>
+      </form>
+    </article>
   );
 }
 

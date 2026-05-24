@@ -817,6 +817,33 @@ input:disabled {
   font-weight: 600;
 }
 
+.ai-form {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-enable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ai-actions a {
+  color: var(--color-action);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .wallet-status {
   display: grid;
   gap: 4px;
