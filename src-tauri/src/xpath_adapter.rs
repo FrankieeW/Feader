@@ -9,8 +9,8 @@ use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
 use crate::models::{
-    env_reference_name, ParsedArticle, ParsedFeed, XPathCustomFieldScope, XPathFieldDiagnostic,
-    XPathPreview, XPathRulePack, XPathSelectors,
+    env_reference_name, ParsedArticle, ParsedFeed, ReaderConfig, XPathCustomFieldScope,
+    XPathFieldDiagnostic, XPathPreview, XPathRulePack, XPathSelectors,
 };
 use crate::plugin_registry;
 
@@ -534,6 +534,11 @@ async fn fetch_detail_content(
         .transpose()?
         .flatten()
         .map(|html| apply_content_cleanup(&html, selectors))
+        .transpose()?
+        .map(|html| match &selectors.reader {
+            Some(reader) => apply_reader_transforms(&html, url, reader),
+            None => Ok(html),
+        })
         .transpose()?;
     let fields = custom_fields_json(root, selectors, XPathCustomFieldScope::Detail)?;
     Ok((content, fields))
@@ -564,6 +569,96 @@ fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
     evaluate_content_html(Node::Root(package.as_document().root()), Some(selector))
+}
+
+/// Apply plugin reader transforms to extracted detail HTML.
+pub fn apply_reader_transforms(
+    html: &str,
+    base_url: &str,
+    reader: &ReaderConfig,
+) -> Result<String, String> {
+    let mut out = html.to_string();
+    for selector in &reader.remove_selectors {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            continue;
+        }
+        for fragment in evaluate_node_html_fragments(&out, selector)? {
+            out = out.replace(&fragment, "");
+        }
+    }
+    if reader.resolve_relative_urls || reader.rewrite_links {
+        if let Ok(base) = url::Url::parse(base_url) {
+            out = rewrite_attr_urls(&out, &base, "href");
+            out = rewrite_attr_urls(&out, &base, "src");
+        }
+    }
+    Ok(out)
+}
+
+fn rewrite_attr_urls(html: &str, base: &url::Url, attr: &str) -> String {
+    let pattern = format!(r#"(?i){attr}\s*=\s*"([^"]*)""#);
+    let regex = match Regex::new(&pattern) {
+        Ok(regex) => regex,
+        Err(_) => return html.to_string(),
+    };
+    regex
+        .replace_all(html, |caps: &regex::Captures| {
+            let raw = &caps[1];
+            match base.join(raw) {
+                Ok(joined) => format!("{attr}=\"{}\"", joined),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .to_string()
+}
+
+fn evaluate_node_html_fragments(document: &str, selector: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_html_document(document)?;
+    let package = parser::parse(&normalized).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let root = Node::Root(package.as_document().root());
+    let xpath = compile_xpath(selector)?;
+    let context = Context::new();
+    let mut fragments = Vec::new();
+    if let Value::Nodeset(nodes) = xpath.evaluate(&context, root).map_err(|e| e.to_string())? {
+        for node in nodes.document_order() {
+            if let Some(html) = serialize_node_html(node) {
+                fragments.push(html);
+            }
+        }
+    }
+    Ok(fragments)
+}
+
+fn serialize_node_html(node: Node<'_>) -> Option<String> {
+    match node {
+        Node::Element(element) => {
+            let mut out = String::new();
+            let name = element.name().local_part();
+            out.push('<');
+            out.push_str(name);
+            for attribute in element.attributes() {
+                out.push(' ');
+                out.push_str(attribute.name().local_part());
+                out.push_str("=\"");
+                out.push_str(&escape_html(attribute.value(), true));
+                out.push('"');
+            }
+            out.push('>');
+            if !is_void_element(name) {
+                for child in element.children() {
+                    serialize_child(child, &mut out);
+                }
+                out.push_str("</");
+                out.push_str(name);
+                out.push('>');
+            }
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 fn apply_content_cleanup(value: &str, selectors: &XPathSelectors) -> Result<String, String> {
@@ -1374,6 +1469,24 @@ mod tests {
         let xpath = "//a[contains(@href,'logout') or contains(@href,'action=logout')]";
         assert!(evaluate_logged_in(logged_in, xpath).unwrap());
         assert!(!evaluate_logged_in(logged_out, xpath).unwrap());
+    }
+
+    #[test]
+    fn applies_reader_transforms() {
+        use crate::models::ReaderConfig;
+        let html = r#"<div><a href="/thread-1.html">x</a><img src="img/a.png"/><ignore_js_op>junk</ignore_js_op></div>"#;
+        let reader = ReaderConfig {
+            remove_selectors: vec!["//ignore_js_op".to_string()],
+            resolve_relative_urls: true,
+            rewrite_links: true,
+            show_custom_fields: false,
+            layout: None,
+            css: None,
+        };
+        let out = apply_reader_transforms(html, "https://forum.naixi.net/forum-64-1.html", &reader).unwrap();
+        assert!(!out.contains("junk"));
+        assert!(out.contains("https://forum.naixi.net/thread-1.html"));
+        assert!(out.contains("https://forum.naixi.net/img/a.png"));
     }
 
     #[test]
