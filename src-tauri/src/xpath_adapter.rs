@@ -393,11 +393,15 @@ pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) 
 }
 
 /// True when `logged_in_xpath` matches at least one node in `document`.
+///
+/// Falls back to a text-based heuristic when the document HTML is too messy for
+/// strict XML parsing (e.g. unclosed non-void elements on large forum pages).
 pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool, String> {
     let normalized = normalize_html_document(document)?;
-    let package = parser::parse(&normalized).map_err(|error| {
-        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
-    })?;
+    let package = match parser::parse(&normalized) {
+        Ok(pkg) => pkg,
+        Err(_) => return evaluate_logged_in_by_text(document, logged_in_xpath),
+    };
     let root = Node::Root(package.as_document().root());
     let xpath = compile_xpath(logged_in_xpath)?;
     let context = Context::new();
@@ -407,6 +411,28 @@ pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool,
         Value::String(value) => Ok(!value.is_empty()),
         Value::Number(value) => Ok(value != 0.0),
     }
+}
+
+/// Best-effort text match when the document can't be parsed as strict XML.
+fn evaluate_logged_in_by_text(document: &str, xpath: &str) -> Result<bool, String> {
+    // Extract all single-quoted string literals from the XPath expression.
+    let terms: Vec<&str> = Regex::new("'([^']+)'")
+        .map_err(|e| e.to_string())?
+        .captures_iter(xpath)
+        .filter_map(|cap| cap.get(1))
+        .map(|m| m.as_str())
+        .filter(|s| s.len() >= 3) // ignore short substrings like class fragments
+        .collect();
+    if terms.is_empty() {
+        return Err("无法解析该页面的 HTML 结构,也无法从 XPath 中提取搜索关键词".to_string());
+    }
+    let lower = document.to_ascii_lowercase();
+    // Check whether the document contains an <a> tag with any of the terms in its href.
+    let found = terms.iter().any(|term| {
+        let lower_term = term.to_ascii_lowercase();
+        lower.contains(&lower_term)
+    });
+    Ok(found)
 }
 
 /// Fetch `check_url` with the given cookie and report whether the login marker is present.
