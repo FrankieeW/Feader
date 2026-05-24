@@ -43,19 +43,32 @@ pub async fn fetch_xpath_source(
     let mut visited = std::collections::HashSet::new();
     let mut current = url.to_string();
     let mut articles = Vec::new();
+    let mut first_page = true;
 
     for _ in 0..MAX_XPATH_PAGES {
         if !visited.insert(current.clone()) {
             break;
         }
 
-        let body = fetch_page(&current).await?;
+        // The first page is the source's primary content: its failure fails the
+        // refresh. Later pages are best-effort — a failure there keeps the
+        // articles already gathered instead of discarding the whole refresh.
+        let body = match fetch_page(&current).await {
+            Ok(body) => body,
+            Err(error) if first_page => return Err(error),
+            Err(_) => break,
+        };
         let normalized = normalize_html(&body);
-        let feed = parse_xpath_source(&current, &normalized, selectors)?;
+        let feed = match parse_xpath_source(&current, &normalized, selectors) {
+            Ok(feed) => feed,
+            Err(error) if first_page => return Err(error),
+            Err(_) => break,
+        };
         articles.extend(feed.articles);
+        first_page = false;
 
-        match next_page_url(&current, &normalized, selectors)? {
-            Some(next) if !visited.contains(&next) => current = next,
+        match next_page_url(&current, &normalized, selectors) {
+            Ok(Some(next)) if !visited.contains(&next) => current = next,
             _ => break,
         }
     }
@@ -566,6 +579,9 @@ fn serialize_child(child: ChildOfElement<'_>, out: &mut String) {
                 out.push('"');
             }
             out.push('>');
+            if is_void_element(name) {
+                return;
+            }
             for grandchild in element.children() {
                 serialize_child(grandchild, out);
             }
@@ -576,6 +592,26 @@ fn serialize_child(child: ChildOfElement<'_>, out: &mut String) {
         ChildOfElement::Text(text) => out.push_str(&escape_html(text.text(), false)),
         _ => {}
     }
+}
+
+fn is_void_element(name: &str) -> bool {
+    matches!(
+        name,
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
 }
 
 fn escape_html(value: &str, in_attribute: bool) -> String {
@@ -675,6 +711,30 @@ mod tests {
         let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
         assert!(html.contains("<strong>"), "expected inner tags, got: {html}");
         assert!(html.contains("Bold"));
+    }
+
+    #[test]
+    fn content_inner_html_self_closes_void_elements() {
+        let mut selectors = selectors();
+        selectors.content = Some(".//section".to_string());
+
+        let feed = parse_xpath_source(
+            "https://example.com/blog/",
+            r#"
+            <html><body>
+              <article>
+                <h2><a href="/one">First</a></h2>
+                <section>Pic<img src="/a.png"/>end</section>
+              </article>
+            </body></html>
+            "#,
+            &selectors,
+        )
+        .expect("xpath extracts");
+
+        let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
+        assert!(html.contains("<img src=\"/a.png\">"), "got: {html}");
+        assert!(!html.contains("</img>"), "void element must not close, got: {html}");
     }
 
     #[test]
