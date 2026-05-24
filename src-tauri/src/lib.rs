@@ -264,7 +264,12 @@ async fn load_market_index(
     let cache_key = format!("registry_index_{}", market.id);
     match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
         Some(cached) => match serde_json::from_str::<RegistryIndex>(&cached) {
-            Ok(index) if registry_cache_is_usable(&index) => Ok(index),
+            Ok(index)
+                if registry_cache_is_usable(&index)
+                    && registry_cache_includes_required_official_templates(market, &index) =>
+            {
+                Ok(index)
+            }
             _ => fetch_and_cache_market_index(database, market).await,
         },
         None => fetch_and_cache_market_index(database, market).await,
@@ -549,6 +554,18 @@ fn registry_cache_is_usable(index: &RegistryIndex) -> bool {
                 value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
             })
         })
+}
+
+fn registry_cache_includes_required_official_templates(
+    market: &PluginMarket,
+    index: &RegistryIndex,
+) -> bool {
+    if market.id != "official-feaderhub" {
+        return true;
+    }
+    ["app-ui-theme", "source-list-view", "detail-view"]
+        .iter()
+        .all(|kind| index.plugins.iter().any(|entry| entry.kind == *kind))
 }
 
 fn builtin_rsshub_instances() -> Vec<RssHubInstance> {
@@ -1498,6 +1515,27 @@ mod tests {
         })
         .expect("market parses");
         assert_eq!(plugin_registry::market_trust(&community), "community");
+    }
+
+    #[test]
+    fn stale_official_registry_cache_without_view_templates_is_rejected() {
+        let official = plugin_registry::official_plugin_market();
+        let stale_index = RegistryIndex {
+            schema_version: "feader-registry/v1".to_string(),
+            updated_at: "2026-05-24T00:00:00Z".to_string(),
+            plugins: vec![models::RegistryPluginEntry {
+                id: "official.naixi-forum.xpath".to_string(),
+                name: "Naixi Forum XPath Rules".to_string(),
+                version: "0.1.0".to_string(),
+                kind: models::PLUGIN_KIND_XPATH.to_string(),
+                manifest: "plugins/official.naixi-forum.xpath/manifest.json".to_string(),
+                sha256: Some("0".repeat(64)),
+            }],
+        };
+        assert!(!registry_cache_includes_required_official_templates(
+            &official,
+            &stale_index
+        ));
     }
 }
 

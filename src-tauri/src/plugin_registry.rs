@@ -9,9 +9,10 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use crate::models::{
-    PluginMarket, RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteXPathRulePack,
-    XPathRuleCandidate, XPathRulePack, XPathSelectors, PLUGIN_KIND_JSON_API_FEED,
-    PLUGIN_KIND_XPATH,
+    PluginMarket, RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteViewPlugin,
+    RemoteXPathRulePack, XPathRuleCandidate, XPathRulePack, XPathSelectors,
+    PLUGIN_KIND_APP_UI_THEME, PLUGIN_KIND_DETAIL_VIEW, PLUGIN_KIND_JSON_API_FEED,
+    PLUGIN_KIND_SOURCE_LIST_VIEW, PLUGIN_KIND_XPATH,
 };
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
@@ -19,7 +20,11 @@ const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
 const REGISTRY_RAW_BASE: &str = "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main";
 const STATIC_XPATH_KIND: &str = PLUGIN_KIND_XPATH;
 const JSON_API_FEED_KIND: &str = PLUGIN_KIND_JSON_API_FEED;
+const APP_UI_THEME_KIND: &str = PLUGIN_KIND_APP_UI_THEME;
+const SOURCE_LIST_VIEW_KIND: &str = PLUGIN_KIND_SOURCE_LIST_VIEW;
+const DETAIL_VIEW_KIND: &str = PLUGIN_KIND_DETAIL_VIEW;
 const JSON_API_FEED_API_VERSION: &str = "json-api-feed/v1";
+const VIEW_PLUGIN_API_VERSION: &str = "feader-view-plugin/v1";
 const REGISTRY_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const REGISTRY_INDEX_BYTE_CAP: usize = 128 * 1024;
 const PLUGIN_FILE_BYTE_CAP: usize = 256 * 1024;
@@ -133,9 +138,7 @@ async fn fetch_remote_plugin_pack_from_base(
     registry: &str,
     trust: &str,
 ) -> Result<XPathRulePack, String> {
-    let is_xpath = entry.kind == STATIC_XPATH_KIND;
-    let is_json = entry.kind == JSON_API_FEED_KIND;
-    if !is_xpath && !is_json {
+    if !is_supported_registry_kind(&entry.kind) {
         return Err(format!(
             "Plugin {} has unsupported kind '{}'",
             entry.id, entry.kind
@@ -163,11 +166,37 @@ async fn fetch_remote_plugin_pack_from_base(
         .rsplit_once('/')
         .map(|(dir, _)| dir)
         .unwrap_or("");
-    let entry_file = validate_registry_path(&manifest.entry, "rule pack entry")?;
+    let entry_file = validate_registry_path(&manifest.entry, "plugin entry")?;
     let pack_url = format!("{raw_base_url}/{pack_dir}/{entry_file}");
 
-    let pack_body = fetch_text_limited(&pack_url, PLUGIN_FILE_BYTE_CAP, "rule pack").await?;
+    let pack_body = fetch_text_limited(&pack_url, PLUGIN_FILE_BYTE_CAP, "plugin entry").await?;
     verify_sha256(&pack_body, expected_sha, &entry.id)?;
+
+    if is_view_plugin_kind(&manifest.kind) {
+        let pack: RemoteViewPlugin = serde_json::from_str(&pack_body)
+            .map_err(|error| format!("Failed to parse view plugin {}: {error}", manifest.entry))?;
+        validate_view_plugin(entry, &manifest, &pack)?;
+
+        return Ok(XPathRulePack {
+            id: pack.id,
+            name: pack.name,
+            version: pack.version,
+            api_version: manifest.feader_api_version,
+            kind: manifest.kind.clone(),
+            registry: registry.to_string(),
+            trust: trust.to_string(),
+            description: pack
+                .description
+                .or(manifest.description)
+                .unwrap_or_default(),
+            logo: manifest.logo,
+            capabilities: pack.capabilities,
+            candidates: Vec::new(),
+            authors: manifest.authors,
+            parameters: None,
+            auth: None,
+        });
+    }
 
     let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body)
         .map_err(|error| format!("Failed to parse rule pack {}: {error}", manifest.entry))?;
@@ -343,19 +372,14 @@ fn validate_manifest(
             manifest.name, entry.name
         ));
     }
-    let is_xpath = manifest.kind == STATIC_XPATH_KIND;
-    let is_json = manifest.kind == JSON_API_FEED_KIND;
-    if !is_xpath && !is_json {
+    if !is_supported_registry_kind(&manifest.kind) {
         return Err(format!(
             "Manifest kind '{}' is not supported",
             manifest.kind
         ));
     }
-    let expected_api_version = if is_json {
-        JSON_API_FEED_API_VERSION
-    } else {
-        STATIC_XPATH_API_VERSION
-    };
+    let expected_api_version = expected_api_version_for_kind(&manifest.kind)
+        .ok_or_else(|| format!("Manifest kind '{}' is not supported", manifest.kind))?;
     if manifest.feader_api_version != expected_api_version {
         return Err(format!(
             "Manifest API version '{}' is not supported",
@@ -363,6 +387,65 @@ fn validate_manifest(
         ));
     }
     Ok(())
+}
+
+fn validate_view_plugin(
+    entry: &RegistryPluginEntry,
+    manifest: &RemotePluginManifest,
+    pack: &RemoteViewPlugin,
+) -> Result<(), String> {
+    if pack.schema_version != VIEW_PLUGIN_API_VERSION {
+        return Err(format!(
+            "View plugin schema '{}' is not supported",
+            pack.schema_version
+        ));
+    }
+    if pack.id != entry.id || pack.id != manifest.id {
+        return Err("View plugin id does not match manifest or registry".to_string());
+    }
+    if pack.name != entry.name || pack.name != manifest.name {
+        return Err("View plugin name does not match manifest or registry".to_string());
+    }
+    if pack.version != entry.version || pack.version != manifest.version {
+        return Err("View plugin version does not match manifest or registry".to_string());
+    }
+    let expected_slot = match manifest.kind.as_str() {
+        APP_UI_THEME_KIND => "app-ui",
+        SOURCE_LIST_VIEW_KIND => "source-list",
+        DETAIL_VIEW_KIND => "detail-view",
+        _ => {
+            return Err(format!(
+                "View plugin kind '{}' is not supported",
+                manifest.kind
+            ))
+        }
+    };
+    if pack.slot != expected_slot {
+        return Err(format!(
+            "View plugin slot '{}' does not match kind '{}'",
+            pack.slot, manifest.kind
+        ));
+    }
+    Ok(())
+}
+
+fn is_supported_registry_kind(kind: &str) -> bool {
+    kind == STATIC_XPATH_KIND || kind == JSON_API_FEED_KIND || is_view_plugin_kind(kind)
+}
+
+fn is_view_plugin_kind(kind: &str) -> bool {
+    kind == APP_UI_THEME_KIND || kind == SOURCE_LIST_VIEW_KIND || kind == DETAIL_VIEW_KIND
+}
+
+fn expected_api_version_for_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        STATIC_XPATH_KIND => Some(STATIC_XPATH_API_VERSION),
+        JSON_API_FEED_KIND => Some(JSON_API_FEED_API_VERSION),
+        APP_UI_THEME_KIND | SOURCE_LIST_VIEW_KIND | DETAIL_VIEW_KIND => {
+            Some(VIEW_PLUGIN_API_VERSION)
+        }
+        _ => None,
+    }
 }
 
 fn validate_rule_pack(
@@ -657,5 +740,43 @@ mod tests {
             .unwrap(),
             "https://raw.githubusercontent.com/example/market/main/plugins/demo/plugin.json"
         );
+    }
+
+    #[test]
+    fn validates_official_view_plugin_kinds() {
+        let entry = RegistryPluginEntry {
+            id: "official.cyberpunk-ui.view".to_string(),
+            name: "Cyberpunk UI Theme".to_string(),
+            version: "0.1.0".to_string(),
+            kind: APP_UI_THEME_KIND.to_string(),
+            manifest: "plugins/official.cyberpunk-ui.view/manifest.json".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        let manifest = RemotePluginManifest {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            kind: APP_UI_THEME_KIND.to_string(),
+            feader_api_version: VIEW_PLUGIN_API_VERSION.to_string(),
+            description: None,
+            logo: None,
+            entry: "view-plugin.json".to_string(),
+            authors: Vec::new(),
+        };
+        let pack = RemoteViewPlugin {
+            schema_version: VIEW_PLUGIN_API_VERSION.to_string(),
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            slot: "app-ui".to_string(),
+            description: None,
+            capabilities: vec!["app.theme".to_string()],
+        };
+
+        assert!(validate_manifest(&entry, &manifest).is_ok());
+        assert!(validate_view_plugin(&entry, &manifest, &pack).is_ok());
+        assert!(is_supported_registry_kind(APP_UI_THEME_KIND));
+        assert!(is_supported_registry_kind(SOURCE_LIST_VIEW_KIND));
+        assert!(is_supported_registry_kind(DETAIL_VIEW_KIND));
     }
 }

@@ -11,6 +11,9 @@ pub const SOURCE_KIND_JSON_API: &str = "json-api";
 /// Plugin manifests use a longer name to distinguish pack intent from storage kind.
 pub const PLUGIN_KIND_XPATH: &str = "static-xpath-rule-pack";
 pub const PLUGIN_KIND_JSON_API_FEED: &str = "json-api-feed";
+pub const PLUGIN_KIND_APP_UI_THEME: &str = "app-ui-theme";
+pub const PLUGIN_KIND_SOURCE_LIST_VIEW: &str = "source-list-view";
+pub const PLUGIN_KIND_DETAIL_VIEW: &str = "detail-view";
 
 /// A readable source that can produce articles.
 #[derive(Debug, Clone, Serialize)]
@@ -567,6 +570,20 @@ pub struct RemoteXPathRulePack {
     pub parameters: Option<PluginParameters>,
     #[serde(default)]
     pub auth: Option<PluginAuth>,
+}
+
+/// Remote view-plugin template payload.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteViewPlugin {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub slot: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// One page-family rule contributed by a static XPath plugin pack.

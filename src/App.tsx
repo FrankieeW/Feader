@@ -75,9 +75,9 @@ type ViewMode = "reader" | "sources" | "hub" | "settings";
 type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
-type AppUiPluginId = "editorial" | "terminal" | "calm";
+type AppUiPluginId = "editorial" | "terminal" | "calm" | "cyberpunk";
 type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
-type DetailViewPluginId = "magazine" | "focus" | "research";
+type DetailViewPluginId = "magazine" | "focus" | "research" | "cinema";
 type PaneKey = "sidebar" | "timeline";
 type ReaderVideo =
   | {
@@ -479,6 +479,12 @@ const appUiPlugins: ViewPluginDefinition<AppUiPluginId>[] = [
     description: "Soft blue-green chrome and lighter panels for a quieter daily reading workspace.",
     capability: "app.theme",
   },
+  {
+    id: "cyberpunk",
+    name: "Cyberpunk UI Theme",
+    description: "Official FeaderHub neon shell template for high-contrast source work.",
+    capability: "app.theme",
+  },
 ];
 
 const sourceListPlugins: ViewPluginDefinition<SourceListPluginId>[] = [
@@ -519,6 +525,12 @@ const detailViewPlugins: ViewPluginDefinition<DetailViewPluginId>[] = [
     id: "research",
     name: "Research",
     description: "Keeps metadata prominent and body blocks structured for reference-heavy articles.",
+    capability: "detail.view",
+  },
+  {
+    id: "cinema",
+    name: "Cinema Detail View",
+    description: "Official FeaderHub media-forward detail template for visual articles and video.",
     capability: "detail.view",
   },
 ];
@@ -795,6 +807,75 @@ let testModeXPathRulePacks: XPathRulePack[] = [
       ],
       defaults: { maxItems: 20 },
     },
+  },
+  {
+    id: "official.cyberpunk-ui.view",
+    name: "Cyberpunk UI Theme",
+    version: "0.1.0",
+    apiVersion: "feader-view-plugin/v1",
+    kind: "app-ui-theme",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "official",
+    description: "Official app-wide cyberpunk theme template for Feader view plugin authors.",
+    logo: null,
+    capabilities: ["app.theme", "app.chrome", "settings.toggle"],
+    candidates: [],
+    authors: [
+      {
+        name: "Frankie Wang",
+        evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
+        avatarUrl: "https://github.com/FrankieeW.png",
+        website: "https://github.com/FrankieeW",
+        email: "git@frankie.wang",
+        githubId: "FrankieeW",
+      },
+    ],
+  },
+  {
+    id: "official.social-source-list.view",
+    name: "Social Source List View",
+    version: "0.1.0",
+    apiVersion: "feader-view-plugin/v1",
+    kind: "source-list-view",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "official",
+    description: "Official post-stream source list template for social media and short-form feeds.",
+    logo: null,
+    capabilities: ["sourceList.view", "sourceList.avatar", "sourceList.socialMetadata"],
+    candidates: [],
+    authors: [
+      {
+        name: "Frankie Wang",
+        evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
+        avatarUrl: "https://github.com/FrankieeW.png",
+        website: "https://github.com/FrankieeW",
+        email: "git@frankie.wang",
+        githubId: "FrankieeW",
+      },
+    ],
+  },
+  {
+    id: "official.cinema-detail.view",
+    name: "Cinema Detail View",
+    version: "0.1.0",
+    apiVersion: "feader-view-plugin/v1",
+    kind: "detail-view",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "official",
+    description: "Official immersive article detail template with cinematic media emphasis.",
+    logo: null,
+    capabilities: ["detail.view", "detail.heroMedia", "detail.immersiveReading"],
+    candidates: [],
+    authors: [
+      {
+        name: "Frankie Wang",
+        evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
+        avatarUrl: "https://github.com/FrankieeW.png",
+        website: "https://github.com/FrankieeW",
+        email: "git@frankie.wang",
+        githubId: "FrankieeW",
+      },
+    ],
   },
 ];
 
@@ -1506,6 +1587,11 @@ function App() {
   const hubCategories = useMemo(() => {
     const cats = new Set<string>();
     for (const pack of xpathRulePacks) {
+      const viewCategory = viewPluginCategory(pack);
+      if (viewCategory) {
+        cats.add(viewCategory);
+        continue;
+      }
       for (const c of pack.candidates) {
         if (c.pageType.includes("forum")) cats.add("Forum");
         else if (c.pageType.includes("video")) cats.add("Video");
@@ -1520,16 +1606,20 @@ function App() {
     const query = hubSearchQuery.trim().toLowerCase();
     return xpathRulePacks.filter((pack) => {
       if (hubCategory !== "all") {
-        const matchesCat = pack.candidates.some((c) => {
-          const pt = c.pageType.toLowerCase();
-          return pt.includes(hubCategory.toLowerCase());
-        });
+        const viewCategory = viewPluginCategory(pack);
+        const matchesCat = viewCategory
+          ? viewCategory === hubCategory
+          : pack.candidates.some((c) => {
+              const pt = c.pageType.toLowerCase();
+              return pt.includes(hubCategory.toLowerCase());
+            });
         if (!matchesCat) return false;
       }
       if (!query) return true;
       return (
         pack.name.toLowerCase().includes(query) ||
         pack.description.toLowerCase().includes(query) ||
+        pack.kind.toLowerCase().includes(query) ||
         pack.capabilities.some((cap) => cap.toLowerCase().includes(query))
       );
     });
@@ -1732,6 +1822,10 @@ function App() {
   }
 
   async function handleInstallPlugin(pack: MarketplacePluginPack): Promise<void> {
+    if (isViewPluginPack(pack)) {
+      handleEnableViewPlugin(pack);
+      return;
+    }
     if (!pack.sourceMarketId) {
       setStatus("Bundled plugin is already installed");
       return;
@@ -1746,11 +1840,63 @@ function App() {
   }
 
   async function handleUninstallPlugin(pack: MarketplacePluginPack): Promise<void> {
+    if (isViewPluginPack(pack)) {
+      handleDisableViewPlugin(pack);
+      return;
+    }
     await runTask("Uninstalling plugin", async () => {
       await invoke<void>("uninstall_plugin", { pluginId: pack.id });
       await loadXPathPluginPacks(false);
       setStatus(`Uninstalled plugin: ${pack.name}`);
     });
+  }
+
+  function handleEnableViewPlugin(pack: MarketplacePluginPack): void {
+    if (pack.kind === "app-ui-theme") {
+      setAppUiPlugin(appUiPluginFromPack(pack));
+      setStatus(`Enabled view plugin: ${pack.name}`);
+      return;
+    }
+    if (pack.kind === "source-list-view") {
+      setSourceListPlugin(sourceListPluginFromPack(pack));
+      setStatus(`Enabled view plugin: ${pack.name}`);
+      return;
+    }
+    if (pack.kind === "detail-view") {
+      setDetailViewPlugin(detailViewPluginFromPack(pack));
+      setStatus(`Enabled view plugin: ${pack.name}`);
+    }
+  }
+
+  function handleDisableViewPlugin(pack: MarketplacePluginPack): void {
+    if (pack.kind === "app-ui-theme") {
+      setAppUiPlugin(null);
+    } else if (pack.kind === "source-list-view") {
+      setSourceListPlugin(null);
+    } else if (pack.kind === "detail-view") {
+      setDetailViewPlugin(null);
+    }
+    setStatus(`Disabled view plugin: ${pack.name}`);
+  }
+
+  function isViewPluginEnabled(pack: MarketplacePluginPack): boolean {
+    if (pack.kind === "app-ui-theme") {
+      return appUiPlugin === appUiPluginFromPack(pack);
+    }
+    if (pack.kind === "source-list-view") {
+      return sourceListPlugin === sourceListPluginFromPack(pack);
+    }
+    if (pack.kind === "detail-view") {
+      return detailViewPlugin === detailViewPluginFromPack(pack);
+    }
+    return false;
+  }
+
+  function pluginActionLabel(pack: MarketplacePluginPack): string {
+    if (isViewPluginPack(pack)) {
+      return isViewPluginEnabled(pack) ? "Disable" : "Enable";
+    }
+    return pack.installed ? "Add Source" : "Install";
   }
 
   async function handleAddPluginMarket(): Promise<void> {
@@ -2904,8 +3050,8 @@ function App() {
                       <p className="hub-card-desc">{pack.description}</p>
                       <PluginAuthorPanel pack={pack} />
                       <div className="hub-card-meta">
-                        <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
-                        <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
+                        <span>{pluginKindLabel(pack)}</span>
+                        <span>{pluginMetaLabel(pack)}</span>
                       </div>
                       <div className="hub-card-tags">
                         {pack.capabilities.map((cap) => (
@@ -2914,9 +3060,17 @@ function App() {
                       </div>
                       <button
                         className="hub-add-btn primary-action"
-                        onClick={() => pack.installed ? openPluginDialog(pack) : void handleInstallPlugin(pack)}
+                        onClick={() =>
+                          isViewPluginPack(pack)
+                            ? isViewPluginEnabled(pack)
+                              ? handleDisableViewPlugin(pack)
+                              : handleEnableViewPlugin(pack)
+                            : pack.installed
+                              ? openPluginDialog(pack)
+                              : void handleInstallPlugin(pack)
+                        }
                       >
-                        {pack.installed ? "Add Source" : "Install"}
+                        {pluginActionLabel(pack)}
                       </button>
                     </div>
                   </article>
@@ -2954,8 +3108,8 @@ function App() {
                       <p className="hub-card-desc">{pack.description}</p>
                       <PluginAuthorPanel pack={pack} />
                       <div className="hub-card-meta">
-                        <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
-                        <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
+                        <span>{pluginKindLabel(pack)}</span>
+                        <span>{pluginMetaLabel(pack)}</span>
                       </div>
                       <div className="hub-card-tags">
                         {pack.capabilities.map((cap) => (
@@ -2964,11 +3118,19 @@ function App() {
                       </div>
                       <button
                         className="hub-add-btn"
-                        onClick={() => pack.installed ? openPluginDialog(pack) : void handleInstallPlugin(pack)}
+                        onClick={() =>
+                          isViewPluginPack(pack)
+                            ? isViewPluginEnabled(pack)
+                              ? handleDisableViewPlugin(pack)
+                              : handleEnableViewPlugin(pack)
+                            : pack.installed
+                              ? openPluginDialog(pack)
+                              : void handleInstallPlugin(pack)
+                        }
                       >
-                        {pack.installed ? "Add Source" : "Install"}
+                        {pluginActionLabel(pack)}
                       </button>
-                      {pack.installed && !pack.trust.includes("bundled") ? (
+                      {pack.installed && !pack.trust.includes("bundled") && !isViewPluginPack(pack) ? (
                         <button
                           className="hub-remove-btn"
                           onClick={() => void handleUninstallPlugin(pack)}
@@ -4747,6 +4909,62 @@ function readerTypographyLabel(mode: ReaderTypography): string {
     return "Large";
   }
   return "System";
+}
+
+function isViewPluginPack(pack: { kind: string }): boolean {
+  return (
+    pack.kind === "app-ui-theme" ||
+    pack.kind === "source-list-view" ||
+    pack.kind === "detail-view"
+  );
+}
+
+function viewPluginCategory(pack: { kind: string }): string | null {
+  if (pack.kind === "app-ui-theme") {
+    return "App UI";
+  }
+  if (pack.kind === "source-list-view") {
+    return "Source List";
+  }
+  if (pack.kind === "detail-view") {
+    return "Detail View";
+  }
+  return null;
+}
+
+function pluginKindLabel(pack: XPathRulePack): string {
+  if (isViewPluginPack(pack)) {
+    return viewPluginCategory(pack) ?? "View plugin";
+  }
+  return `${pack.candidates.length} rule${pack.candidates.length !== 1 ? "s" : ""}`;
+}
+
+function pluginMetaLabel(pack: XPathRulePack): string {
+  if (isViewPluginPack(pack)) {
+    return pack.capabilities.join(", ");
+  }
+  return pack.candidates.map((candidate) => candidate.pageType).join(", ");
+}
+
+function appUiPluginFromPack(pack: { id: string }): AppUiPluginId {
+  if (pack.id === "official.cyberpunk-ui.view") {
+    return "cyberpunk";
+  }
+  return "terminal";
+}
+
+function sourceListPluginFromPack(pack: { id: string }): SourceListPluginId {
+  if (pack.id === "official.social-source-list.view") {
+    return "social-stream";
+  }
+  return "image-board";
+}
+
+function detailViewPluginFromPack(pack: { id: string }): DetailViewPluginId {
+  if (pack.id === "official.cinema-detail.view") {
+    return "cinema";
+  }
+  return "magazine";
 }
 
 function pluginName<T extends string>(
