@@ -13,6 +13,7 @@ use crate::models::{
 
 const MAX_XPATH_PAGES: usize = 5;
 const XPATH_FETCH_TIMEOUT_SECONDS: u64 = 20;
+const BODY_SNIPPET_CAP: usize = 120;
 
 fn normalize_html(raw: &str) -> String {
     use html5ever::tendril::TendrilSink;
@@ -121,7 +122,34 @@ async fn fetch_page(url: &str) -> Result<String, String> {
         return Err(format!("XPath source request failed with status {status}"));
     }
 
-    response.text().await.map_err(|error| error.to_string())
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_default();
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    reject_non_html_body(&body, &content_type)?;
+    Ok(body)
+}
+
+fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
+    let trimmed = body.trim_start();
+    let content_type = content_type.to_ascii_lowercase();
+    if content_type.contains("json") || trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Err(format!(
+            "XPath sources require an HTML/XML page, but this URL returned JSON-like content: {}",
+            body_snippet(trimmed)
+        ));
+    }
+    Ok(())
+}
+
+fn body_snippet(body: &str) -> String {
+    body.chars()
+        .take(BODY_SNIPPET_CAP)
+        .collect::<String>()
+        .replace(['\n', '\r', '\t'], " ")
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -890,5 +918,11 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.field == "title" && diagnostic.status == "invalid"));
+    }
+
+    #[test]
+    fn rejects_json_like_xpath_source_body() {
+        let error = reject_non_html_body("{\"items\":[]}", "application/json").unwrap_err();
+        assert!(error.contains("returned JSON-like content"));
     }
 }

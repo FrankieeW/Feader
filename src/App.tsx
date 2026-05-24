@@ -856,9 +856,10 @@ function App() {
     setXPathStatus("Suggesting selectors with AI...");
     await runTask("Suggesting selectors", async () => {
       const suggested = await invoke<XPathSelectors>("suggest_xpath_source", { url });
-      setXPathSelectors({ ...defaultXPathSelectors, ...suggested });
+      const nextSelectors = normalizeXPathSelectorsForForm(suggested);
+      setXPathSelectors(nextSelectors);
       setXPathPreview(null);
-      const message = "AI suggested selectors. Run Preview to validate.";
+      const message = `AI suggested selectors. Items: ${nextSelectors.items}; Title: ${nextSelectors.title}; URL: ${nextSelectors.url}. Run Preview to validate.`;
       setStatus(message);
       setXPathStatus(message);
     }, setXPathStatus);
@@ -2411,6 +2412,20 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     content: emptyToUndefined(selectors.content),
     image: emptyToUndefined(selectors.image),
     nextPage: emptyToUndefined(selectors.nextPage),
+  };
+}
+
+function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelectors {
+  return {
+    items: selectors.items?.trim() || defaultXPathSelectors.items,
+    title: selectors.title?.trim() || defaultXPathSelectors.title,
+    url: selectors.url?.trim() || defaultXPathSelectors.url,
+    summary: selectors.summary?.trim() || "",
+    publishedAt: selectors.publishedAt?.trim() || "",
+    author: selectors.author?.trim() || "",
+    content: selectors.content?.trim() || "",
+    image: selectors.image?.trim() || "",
+    nextPage: selectors.nextPage?.trim() || "",
   };
 }
 
