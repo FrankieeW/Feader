@@ -9,6 +9,7 @@ use crate::xpath_adapter::is_valid_xpath;
 
 const AI_HTML_CHAR_CAP: usize = 12_000;
 const AI_REQUEST_TIMEOUT_SECONDS: u64 = 45;
+const AI_RESPONSE_SNIPPET_CAP: usize = 320;
 
 /// Resolve a stored API key: `$NAME`/`${NAME}` from the environment, otherwise literal.
 pub fn resolve_api_key(stored: &str) -> Result<String, String> {
@@ -51,7 +52,12 @@ fn keep_valid(value: Option<String>) -> Option<String> {
 
 /// Parse a model response (possibly wrapped in prose/code fences) into validated selectors.
 pub fn parse_selectors_json(text: &str) -> Result<XPathSelectors, String> {
-    let json = extract_json_object(text).ok_or("AI response did not contain JSON")?;
+    let json = extract_json_object(text).ok_or_else(|| {
+        format!(
+            "AI response did not contain JSON. Response started with: {}",
+            response_snippet(text)
+        )
+    })?;
     let raw: SuggestedSelectors = serde_json::from_str(&json).map_err(|error| error.to_string())?;
 
     let items = keep_valid(raw.items).unwrap_or_default();
@@ -76,12 +82,15 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSelectors, String> {
 
 fn build_prompt(html: &str) -> String {
     format!(
-        "You generate XPath selectors for scraping an article-listing web page.\n\
-         Return ONLY a JSON object with string keys: items, title, url, summary, \
-         publishedAt, author, content, image, nextPage. Each value is an XPath expression; \
-         use \"\" when not applicable. `items` selects each repeating article element; the \
-         other selectors are relative to an item except `nextPage` (document-level). \
-         No prose, no code fences.\n\nHTML:\n{html}"
+        "Generate XPath selectors for an article-listing page from the normalized XHTML below.\n\
+         You must return exactly one JSON object and nothing else.\n\
+         Required string keys: items, title, url, summary, publishedAt, author, content, image, nextPage.\n\
+         Values must be XPath expressions or an empty string. `items` selects each repeating article node.\n\
+         title/url/summary/publishedAt/author/content/image are relative to each item. nextPage is document-level.\n\
+         Do not use Markdown. Do not explain. Do not wrap in code fences.\n\n\
+         Example output:\n\
+         {{\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\"\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
+         Normalized XHTML:\n{html}"
     )
 }
 
@@ -116,7 +125,11 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
     let body = serde_json::json!({
         "model": &settings.model,
         "max_tokens": 1024,
-        "messages": [{ "role": "user", "content": prompt }],
+        "system": "Return only valid JSON for XPath selectors. No prose, no markdown.",
+        "messages": [
+            { "role": "user", "content": prompt },
+            { "role": "assistant", "content": "{" }
+        ],
     });
     let response = ai_http_client()?
         .post(endpoint)
@@ -131,23 +144,53 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         return Err(format!("AI request failed with status {}", response.status()));
     }
     let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
-    value["content"][0]["text"]
+    let text = value["content"][0]["text"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| "Unexpected Anthropic response shape".to_string())
+        .ok_or_else(|| "Unexpected Anthropic response shape".to_string())?;
+    if text.trim_start().starts_with('{') {
+        Ok(text)
+    } else {
+        Ok(format!("{{{text}"))
+    }
 }
 
 async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
     let endpoint = format!("{}/chat/completions", settings.base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let json_body = serde_json::json!({
         "model": &settings.model,
-        "messages": [{ "role": "user", "content": prompt }],
+        "response_format": { "type": "json_object" },
+        "messages": [
+            { "role": "system", "content": "Return only valid JSON for XPath selectors. No prose, no markdown." },
+            { "role": "user", "content": prompt }
+        ],
     });
+    match send_openai_request(&endpoint, key, &json_body).await {
+        Ok(text) => Ok(text),
+        Err(error) if error.contains("status 400") => {
+            let plain_body = serde_json::json!({
+                "model": &settings.model,
+                "messages": [
+                    { "role": "system", "content": "Return only valid JSON for XPath selectors. No prose, no markdown." },
+                    { "role": "user", "content": prompt }
+                ],
+            });
+            send_openai_request(&endpoint, key, &plain_body).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn send_openai_request(
+    endpoint: &str,
+    key: &str,
+    body: &serde_json::Value,
+) -> Result<String, String> {
     let response = ai_http_client()?
-        .post(endpoint)
+        .post(endpoint.to_string())
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json")
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|error| error.to_string())?;
@@ -168,6 +211,19 @@ fn ai_http_client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
+fn response_snippet(text: &str) -> String {
+    let snippet: String = text
+        .trim()
+        .chars()
+        .take(AI_RESPONSE_SNIPPET_CAP)
+        .collect();
+    if snippet.is_empty() {
+        "<empty>".to_string()
+    } else {
+        snippet.replace(['\n', '\r', '\t'], " ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +241,12 @@ mod tests {
     fn rejects_when_required_selectors_missing() {
         let text = "{\"items\":\"\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\"}";
         assert!(parse_selectors_json(text).is_err());
+    }
+
+    #[test]
+    fn reports_non_json_model_response_snippet() {
+        let error = parse_selectors_json("I cannot inspect this page.").unwrap_err();
+        assert!(error.contains("I cannot inspect this page."));
     }
 
     #[test]
