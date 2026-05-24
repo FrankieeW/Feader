@@ -30,6 +30,12 @@ Four plugin improvements, centered on credentials and the reading view:
 - Reader customization: **all three layers** (A structured rules, B layout defaults, C scoped CSS); **Layer C gated to trusted plugins**.
 - Cookie resolution happens in the **command layer**, keeping `xpath_adapter` pure.
 
+### Field placement (implementation refinement)
+
+- **`reader` rides on `XPathSelectors`** (alongside `contentCleanup`/`customFields`), not as a separate top-level pack block. This is because selectors are what get persisted into `sources.config_json` and what flow into the adapter and the frontend dialog — so the reader config is automatically persisted per-source and available at both fetch time (server-side transforms) and render time (layout/css/customFields). In the rule-pack JSON it lives inside each candidate's `selectors`.
+- **`auth` is pack-level** (one credential probe per plugin). It is carried on the pack model so the frontend can read it; the `check_plugin_credential` command receives `checkUrl` + `loggedInXPath` as explicit params from the frontend, so the backend needs no registry lookup.
+- **Layer C trust gating** uses the persisted `XPathSourcePluginInfo.trust` on the source, so the reader can decide whether to inject CSS without re-fetching the pack.
+
 ## Architecture
 
 ### 1. Data model & storage (`src-tauri/src/db.rs`)
