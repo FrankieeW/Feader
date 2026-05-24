@@ -2,6 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical source kinds persisted in the database.
+pub const SOURCE_KIND_RSS: &str = "rss";
+pub const SOURCE_KIND_XPATH: &str = "xpath";
+pub const SOURCE_KIND_JSON_API: &str = "json-api";
+
+/// Plugin manifests use a longer name to distinguish pack intent from storage kind.
+pub const PLUGIN_KIND_XPATH: &str = "static-xpath-rule-pack";
+pub const PLUGIN_KIND_JSON_API_FEED: &str = "json-api-feed";
+
 /// A readable source that can produce articles.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

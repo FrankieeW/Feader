@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension, ToSql};
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
     PluginRefreshOverride, Source, WalletLoginChallenge, WalletSession, XPathSelectors,
+    SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_XPATH,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -47,7 +48,7 @@ impl AppDatabase {
 
     /// Insert a source if it does not exist, or update its title when provided.
     pub fn add_source(&self, url: &str, title: Option<&str>) -> Result<Source, String> {
-        self.add_source_with_kind("rss", url, title, None)
+        self.add_source_with_kind(SOURCE_KIND_RSS, url, title, None)
     }
 
     /// Insert an XPath source and persist its selector configuration.
@@ -58,7 +59,7 @@ impl AppDatabase {
         selectors: &XPathSelectors,
     ) -> Result<Source, String> {
         let config_json = serde_json::to_string(selectors).map_err(|error| error.to_string())?;
-        self.add_source_with_kind("xpath", url, Some(title), Some(&config_json))
+        self.add_source_with_kind(SOURCE_KIND_XPATH, url, Some(title), Some(&config_json))
     }
 
     /// Insert a JSON API feed source and persist its selector configuration.
@@ -70,7 +71,7 @@ impl AppDatabase {
     ) -> Result<Source, String> {
         let config_json =
             serde_json::to_string(selectors).map_err(|e| format!("Serialize JSON selectors: {e}"))?;
-        self.add_source_with_kind("json-api", url, Some(title), Some(&config_json))
+        self.add_source_with_kind(SOURCE_KIND_JSON_API, url, Some(title), Some(&config_json))
     }
 
     /// Create a single-use SIWE challenge for local wallet login.
@@ -1405,7 +1406,7 @@ mod tests {
 
         let config = updated.config_json.expect("config is stored");
         assert!(config.contains(".//h3/a"));
-        assert_eq!(updated.kind, "xpath");
+        assert_eq!(updated.kind, SOURCE_KIND_XPATH);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use models::{
     PreviewXPathSourceRequest, RefreshTickEvent, RegistryIndex, Source,
     SourceRefreshResult, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
     VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack,
+    SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_XPATH,
     XPathSelectors, XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
@@ -396,14 +397,20 @@ async fn update_xpath_source(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Source, String> {
     let source = database.get_source(request.source_id)?;
-    if source.kind != "xpath" {
-        return Err("Only XPath sources can update selector config".to_string());
+    if source.kind != SOURCE_KIND_XPATH && source.kind != SOURCE_KIND_JSON_API {
+        return Err("Selectors can only be updated for XPath and JSON API sources".to_string());
     }
 
-    let selectors = apply_plugin_cookie(&database, request.selectors.clone());
-    let feed = xpath_adapter::fetch_xpath_source(&source.url, &selectors).await?;
+    let is_json = source.kind == SOURCE_KIND_JSON_API;
+    let feed = if is_json {
+        let cookie = resolve_json_cookie(&database, &request.selectors);
+        json_adapter::fetch_json_feed(&source.url, &request.selectors, cookie.as_deref()).await
+    } else {
+        let selectors = apply_plugin_cookie(&database, request.selectors.clone());
+        xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
+    }?;
     if feed.articles.is_empty() {
-        return Err("XPath selectors did not extract any articles".to_string());
+        return Err("Selectors did not extract any articles".to_string());
     }
 
     let source = database.update_xpath_source_config(source.id, &request.selectors)?;
@@ -525,12 +532,12 @@ fn mark_articles_read(
 
 async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Result<usize, String> {
     let feed = match source.kind.as_str() {
-        "rss" => feed_adapter::fetch_feed(&source.url).await,
-        "xpath" => {
+        SOURCE_KIND_RSS => feed_adapter::fetch_feed(&source.url).await,
+        SOURCE_KIND_XPATH => {
             let selectors = apply_plugin_cookie(database, parse_xpath_selectors(source)?);
             xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
         }
-        "json-api" => {
+        SOURCE_KIND_JSON_API => {
             let selectors = parse_xpath_selectors(source)?;
             let cookie = resolve_json_cookie(database, &selectors);
             json_adapter::fetch_json_feed(&source.url, &selectors, cookie.as_deref()).await
@@ -541,7 +548,7 @@ async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Resul
     match feed {
         Ok(feed) => {
             let article_count = feed.articles.len();
-            let source_title = (source.kind == "rss")
+            let source_title = (source.kind == SOURCE_KIND_RSS)
                 .then_some(feed.title.as_deref())
                 .flatten();
             database.upsert_articles(source.id, source_title, &feed.articles)?;

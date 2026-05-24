@@ -10,14 +10,14 @@ use sha2::{Digest, Sha256};
 
 use crate::models::{
     RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteXPathRulePack,
-    XPathRuleCandidate, XPathRulePack, XPathSelectors,
+    XPathRuleCandidate, XPathRulePack, XPathSelectors, PLUGIN_KIND_JSON_API_FEED, PLUGIN_KIND_XPATH,
 };
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
 const REGISTRY_RAW_BASE: &str = "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main";
-const STATIC_XPATH_KIND: &str = "static-xpath-rule-pack";
-const JSON_API_FEED_KIND: &str = "json-api-feed";
+const STATIC_XPATH_KIND: &str = PLUGIN_KIND_XPATH;
+const JSON_API_FEED_KIND: &str = PLUGIN_KIND_JSON_API_FEED;
 const JSON_API_FEED_API_VERSION: &str = "json-api-feed/v1";
 const REGISTRY_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const REGISTRY_INDEX_BYTE_CAP: usize = 128 * 1024;
@@ -145,7 +145,7 @@ pub async fn fetch_remote_plugin_pack(
             .or(manifest.description)
             .unwrap_or_default(),
         logo: manifest.logo,
-        capabilities: vec!["xpath.selectorCandidates".to_string()],
+        capabilities: plugin_capabilities(&pack.candidates),
         candidates: pack.candidates,
         authors: manifest.authors,
         parameters: pack.parameters,
@@ -259,6 +259,14 @@ fn validate_rule_pack(
         ));
     }
     Ok(())
+}
+
+fn plugin_capabilities(candidates: &[XPathRuleCandidate]) -> Vec<String> {
+    let mut caps = vec!["xpath.selectorCandidates".to_string()];
+    if candidates.iter().any(|c| !c.prompt_rule.is_empty()) {
+        caps.push("ai.promptRules".to_string());
+    }
+    caps
 }
 
 fn verify_sha256(body: &str, expected: &str, plugin_id: &str) -> Result<(), String> {
