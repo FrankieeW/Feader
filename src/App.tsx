@@ -2269,7 +2269,8 @@ function App() {
                   onChange={(e) => setDialogCookie(e.currentTarget.value)}
                   placeholder='name=value; ... or $FEADER_NAIXI_COOKIE'
                   type="password"
-                  value={pluginCredential?.cookieSet ? "saved" : dialogCookie}
+                  value={dialogCookie}
+                  placeholder={pluginCredential?.cookieSet ? "Cookie saved — type to replace" : "name=value; ... or $FEADER_NAIXI_COOKIE"}
                 />
                 <small className="cookie-field-hint">
                   {pluginCredential?.cookieSet
