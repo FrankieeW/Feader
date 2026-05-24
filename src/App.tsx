@@ -2129,7 +2129,7 @@ function App() {
                   aria-label="Cookie header"
                   disabled={isDialogBusy}
                   onChange={(e) => setDialogCookie(e.currentTarget.value)}
-                  placeholder="name=value; ... or $FEADER_NAIXI_COOKIE"
+                  placeholder='name=value; ... or {"name":"value"} or $FEADER_NAIXI_COOKIE'
                   type="password"
                   value={dialogCookie}
                 />
@@ -3247,11 +3247,11 @@ function XPathSourceForm({
                 cookie: event.currentTarget.value,
               })
             }
-            placeholder="name=value; ... or $ENV_NAME"
+            placeholder='name=value; ... or {"name":"value"} or $ENV_NAME'
             type="password"
             value={selectors.cookie ?? ""}
           />
-          <small className="selector-hint">Sent as the Cookie header for list and detail pages.</small>
+          <small className="selector-hint">Sent as the Cookie header for list and detail pages; JSON objects are converted automatically.</small>
         </label>
         <SelectorInput
           disabled={isBusy}

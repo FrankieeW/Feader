@@ -248,11 +248,43 @@ fn cookie_header_value(selectors: &XPathSelectors) -> Result<Option<String>, Str
         return Ok(None);
     };
     if let Some(name) = env_reference_name(value) {
-        return std::env::var(&name)
-            .map(|cookie| Some(cookie.trim().to_string()))
-            .map_err(|_| format!("Cookie environment variable {name} is not set"));
+        let cookie = std::env::var(&name)
+            .map_err(|_| format!("Cookie environment variable {name} is not set"))?;
+        return normalize_cookie_input(&cookie).map(Some);
     }
-    Ok(Some(value.to_string()))
+    normalize_cookie_input(value).map(Some)
+}
+
+fn normalize_cookie_input(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with('{') {
+        return Ok(trimmed.to_string());
+    }
+    let object = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(trimmed)
+        .map_err(|error| format!("Cookie JSON is invalid: {error}"))?;
+    let cookies = object
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let name = name.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            cookie_json_value(&value).map(|value| format!("{name}={value}"))
+        })
+        .collect::<Vec<_>>();
+    if cookies.is_empty() {
+        return Err("Cookie JSON did not contain any stringable values".to_string());
+    }
+    Ok(cookies.join("; "))
+}
+
+fn cookie_json_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
 }
 
 fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
@@ -1569,6 +1601,22 @@ mod tests {
         .expect("extracts detail")
         .expect("detail content exists");
         assert!(detail_html.contains("原来年底到期"));
+    }
+
+    #[test]
+    fn accepts_cookie_json_object_input() {
+        let selectors = XPathSelectors {
+            cookie: Some(r#"{"sid":"abc","last":123,"enabled":true}"#.to_string()),
+            ..XPathSelectors::default()
+        };
+
+        let cookie = cookie_header_value(&selectors)
+            .expect("normalizes cookie")
+            .expect("cookie is set");
+
+        assert!(cookie.contains("sid=abc"));
+        assert!(cookie.contains("last=123"));
+        assert!(cookie.contains("enabled=true"));
     }
 
     #[test]
