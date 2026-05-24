@@ -76,6 +76,19 @@ type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
 type PaneKey = "sidebar" | "timeline";
+type ReaderVideo =
+  | {
+      kind: "file";
+      url: string;
+      label: string;
+      mimeType?: string;
+      poster?: string | null;
+    }
+  | {
+      kind: "embed";
+      url: string;
+      label: string;
+    };
 
 type PaneWidths = {
   sidebar: number;
@@ -4319,6 +4332,10 @@ function ReaderArticle({
     () => (article.contentHtml ? sanitizeArticleHtml(article.contentHtml) : ""),
     [article.contentHtml],
   );
+  const readerVideos = useMemo(
+    () => collectReaderVideos(article, sanitizedHtml),
+    [article, sanitizedHtml],
+  );
 
   return (
     <article className="reader-article" data-typography={readerTypography}>
@@ -4357,6 +4374,7 @@ function ReaderArticle({
       {article.imageUrl ? (
         <img alt="" className="reader-image" src={article.imageUrl} />
       ) : null}
+      <ReaderVideoPlayer videos={readerVideos} />
       <div className="reader-body">
         {sanitizedHtml ? (
           <div dangerouslySetInnerHTML={{ __html: sanitizedHtml }} />
@@ -4369,6 +4387,44 @@ function ReaderArticle({
         )}
       </div>
     </article>
+  );
+}
+
+function ReaderVideoPlayer({ videos }: { videos: ReaderVideo[] }) {
+  if (videos.length === 0) {
+    return null;
+  }
+  return (
+    <section className="reader-video-stack" aria-label="Article video player">
+      {videos.map((video) => (
+        <figure className="reader-video-frame" key={`${video.kind}:${video.url}`}>
+          {video.kind === "file" ? (
+            <video controls preload="metadata" poster={video.poster ?? undefined}>
+              <source src={video.url} type={video.mimeType} />
+              <a href={video.url} rel="noreferrer" target="_blank">
+                Open video
+              </a>
+            </video>
+          ) : (
+            <iframe
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              sandbox="allow-same-origin allow-scripts allow-presentation allow-popups"
+              src={video.url}
+              title={video.label}
+            />
+          )}
+          <figcaption>
+            <span>{video.kind === "file" ? "Video" : "Embedded video"}</span>
+            <a href={video.url} rel="noreferrer" target="_blank">
+              Open
+            </a>
+          </figcaption>
+        </figure>
+      ))}
+    </section>
   );
 }
 
@@ -5184,6 +5240,9 @@ function sourceDiagnostic(source: Source): string {
 }
 
 function articleBodyState(article: Article): string {
+  if (collectReaderVideos(article, article.contentHtml ?? "").length > 0) {
+    return article.contentHtml || article.contentText ? "Video + body" : "Video";
+  }
   if (article.contentText) {
     return "Text";
   }
@@ -5218,6 +5277,139 @@ function formatDate(value?: string | null): string {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "").trim();
+}
+
+function collectReaderVideos(article: Article, html: string): ReaderVideo[] {
+  const videos = new Map<string, ReaderVideo>();
+  const addVideo = (candidate: ReaderVideo | null) => {
+    if (candidate && !videos.has(candidate.url)) {
+      videos.set(candidate.url, candidate);
+    }
+  };
+
+  addVideo(videoCandidateFromUrl(article.url, "Article video", article.imageUrl));
+  if (article.canonicalUrl) {
+    addVideo(videoCandidateFromUrl(article.canonicalUrl, "Canonical video", article.imageUrl));
+  }
+
+  if (html && typeof DOMParser !== "undefined") {
+    const document = new DOMParser().parseFromString(html, "text/html");
+    document.querySelectorAll("video").forEach((video, index) => {
+      const poster = cleanMediaUrl(video.getAttribute("poster")) ?? article.imageUrl;
+      addVideo(videoCandidateFromUrl(video.getAttribute("src"), `Video ${index + 1}`, poster));
+      video.querySelectorAll("source").forEach((source, sourceIndex) => {
+        addVideo(
+          videoCandidateFromUrl(
+            source.getAttribute("src"),
+            `Video ${index + 1}.${sourceIndex + 1}`,
+            poster,
+          ),
+        );
+      });
+    });
+
+    document.querySelectorAll("iframe").forEach((frame, index) => {
+      addVideo(embedVideoCandidate(frame.getAttribute("src"), `Embedded video ${index + 1}`));
+    });
+
+    document.querySelectorAll("a[href]").forEach((anchor, index) => {
+      addVideo(videoCandidateFromUrl(anchor.getAttribute("href"), `Linked video ${index + 1}`, article.imageUrl));
+      addVideo(embedVideoCandidate(anchor.getAttribute("href"), `Embedded video ${index + 1}`));
+    });
+  }
+
+  return [...videos.values()].slice(0, 3);
+}
+
+function videoCandidateFromUrl(
+  value: string | null | undefined,
+  label: string,
+  poster?: string | null,
+): ReaderVideo | null {
+  const url = cleanMediaUrl(value);
+  if (!url || !isDirectVideoUrl(url)) {
+    return null;
+  }
+  return {
+    kind: "file",
+    url,
+    label,
+    mimeType: videoMimeType(url),
+    poster: cleanMediaUrl(poster),
+  };
+}
+
+function embedVideoCandidate(
+  value: string | null | undefined,
+  label: string,
+): ReaderVideo | null {
+  const url = cleanMediaUrl(value);
+  const embedUrl = url ? normalizeTrustedVideoEmbedUrl(url) : null;
+  return embedUrl ? { kind: "embed", url: embedUrl, label } : null;
+}
+
+function cleanMediaUrl(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.href);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function isDirectVideoUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /\.(mp4|webm|ogv|ogg|mov|m4v|m3u8)(?:$|\?)/i.test(parsed.pathname + parsed.search);
+  } catch {
+    return false;
+  }
+}
+
+function videoMimeType(url: string): string | undefined {
+  const path = new URL(url).pathname.toLowerCase();
+  if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "video/mp4";
+  if (path.endsWith(".webm")) return "video/webm";
+  if (path.endsWith(".ogv") || path.endsWith(".ogg")) return "video/ogg";
+  if (path.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  return undefined;
+}
+
+function normalizeTrustedVideoEmbedUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      const id = parsed.pathname.startsWith("/embed/")
+        ? parsed.pathname.split("/")[2]
+        : parsed.searchParams.get("v");
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+    }
+    if (host === "youtu.be") {
+      const id = parsed.pathname.split("/").filter(Boolean)[0];
+      return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+    }
+    if (host === "player.vimeo.com" && parsed.pathname.startsWith("/video/")) {
+      return parsed.toString();
+    }
+    if (host === "vimeo.com") {
+      const id = parsed.pathname.split("/").filter(Boolean)[0];
+      return id ? `https://player.vimeo.com/video/${encodeURIComponent(id)}` : null;
+    }
+    if (host === "player.bilibili.com") {
+      return parsed.toString();
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
