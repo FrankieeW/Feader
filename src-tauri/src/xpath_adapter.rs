@@ -2,14 +2,15 @@
 
 use std::time::Duration;
 
+use regex::Regex;
 use sxd_document::dom::{ChildOfElement, Element};
 use sxd_document::parser;
 use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
 use crate::models::{
-    env_reference_name, ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview,
-    XPathRulePack, XPathSelectors,
+    env_reference_name, ParsedArticle, ParsedFeed, XPathCustomFieldScope, XPathFieldDiagnostic,
+    XPathPreview, XPathRulePack, XPathSelectors,
 };
 use crate::plugin_registry;
 
@@ -377,12 +378,17 @@ pub fn parse_xpath_source(
             continue;
         };
         let url = absolutize_url(base_url, &raw_url)?;
-        let content_html = evaluate_content_html(item, selectors.content.as_deref())?;
+        let content_html = evaluate_content_html(item, selectors.content.as_deref())?
+            .map(|html| apply_content_cleanup(&html, selectors))
+            .transpose()?;
         let content_text = if content_html.is_some() {
             None
         } else {
             evaluate_optional_string(item, selectors.content.as_deref())?
+                .map(|text| apply_content_cleanup(&text, selectors))
+                .transpose()?
         };
+        let tags_json = custom_fields_json(item, selectors, XPathCustomFieldScope::Item)?;
 
         articles.push(ParsedArticle {
             external_id: Some(url.clone()),
@@ -397,7 +403,7 @@ pub fn parse_xpath_source(
             image_url: evaluate_optional_string(item, selectors.image.as_deref())?
                 .map(|value| absolutize_url(base_url, &value))
                 .transpose()?,
-            tags_json: None,
+            tags_json,
         });
     }
 
@@ -411,24 +417,26 @@ async fn enrich_articles_with_detail_content(
     mut articles: Vec<ParsedArticle>,
     selectors: &XPathSelectors,
 ) -> Result<Vec<ParsedArticle>, String> {
-    let Some(selector) = selectors
+    let selector = selectors
         .detail_content
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+        .filter(|value| !value.is_empty());
+    if let Some(selector) = selector {
+        compile_xpath(selector)?;
+    }
+    if selector.is_none() && !has_detail_custom_fields(selectors) {
         return Ok(articles);
-    };
-    compile_xpath(selector)?;
+    }
 
     for article in articles.iter_mut().take(MAX_XPATH_DETAIL_ARTICLES) {
-        if article.content_html.is_some() || article.content_text.is_some() {
-            continue;
-        }
-        if let Ok(Some(content_html)) =
-            fetch_detail_content_html(&article.url, selector, selectors).await
+        if let Ok((content_html, fields)) =
+            fetch_detail_content(&article.url, selector, selectors).await
         {
-            article.content_html = Some(content_html);
+            if article.content_html.is_none() && article.content_text.is_none() {
+                article.content_html = content_html;
+            }
+            merge_tags_json(&mut article.tags_json, fields)?;
         }
     }
 
@@ -439,58 +447,160 @@ async fn enrich_preview_with_detail_content(
     articles: &mut [ParsedArticle],
     selectors: &XPathSelectors,
 ) -> Result<(), String> {
-    let Some(selector) = selectors
+    let selector = selectors
         .detail_content
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+        .filter(|value| !value.is_empty());
+    if let Some(selector) = selector {
+        compile_xpath(selector)?;
+    }
+    if selector.is_none() && !has_detail_custom_fields(selectors) {
         return Ok(());
-    };
-    compile_xpath(selector)?;
+    }
 
     for article in articles.iter_mut().take(3) {
-        if let Ok(Some(content_text)) =
-            fetch_detail_content_text(&article.url, selector, selectors).await
+        if let Ok((content_text, fields)) =
+            fetch_detail_preview(&article.url, selector, selectors).await
         {
-            article.content_text = Some(content_text);
+            article.content_text = content_text;
+            merge_tags_json(&mut article.tags_json, fields)?;
         }
     }
 
     Ok(())
 }
 
-async fn fetch_detail_content_html(
+async fn fetch_detail_content(
     url: &str,
-    selector: &str,
+    selector: Option<&str>,
     selectors: &XPathSelectors,
-) -> Result<Option<String>, String> {
-    let body = fetch_page(url, selectors).await?;
-    let document = normalize_html_document(&body)?;
-    extract_detail_content_html(&document, selector)
-}
-
-async fn fetch_detail_content_text(
-    url: &str,
-    selector: &str,
-    selectors: &XPathSelectors,
-) -> Result<Option<String>, String> {
+) -> Result<(Option<String>, Option<String>), String> {
     let body = fetch_page(url, selectors).await?;
     let document = normalize_html_document(&body)?;
     let package = parser::parse(&document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
-    Ok(preview_optional_string(
-        Node::Root(package.as_document().root()),
-        Some(selector),
-    ))
+    let root = Node::Root(package.as_document().root());
+    let content = selector
+        .map(|selector| evaluate_content_html(root, Some(selector)))
+        .transpose()?
+        .flatten()
+        .map(|html| apply_content_cleanup(&html, selectors))
+        .transpose()?;
+    let fields = custom_fields_json(root, selectors, XPathCustomFieldScope::Detail)?;
+    Ok((content, fields))
 }
 
+async fn fetch_detail_preview(
+    url: &str,
+    selector: Option<&str>,
+    selectors: &XPathSelectors,
+) -> Result<(Option<String>, Option<String>), String> {
+    let body = fetch_page(url, selectors).await?;
+    let document = normalize_html_document(&body)?;
+    let package = parser::parse(&document).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let root = Node::Root(package.as_document().root());
+    let content = selector
+        .and_then(|selector| preview_optional_string(root, Some(selector)))
+        .map(|text| apply_content_cleanup(&text, selectors))
+        .transpose()?;
+    let fields = custom_fields_json(root, selectors, XPathCustomFieldScope::Detail)?;
+    Ok((content, fields))
+}
+
+#[cfg(test)]
 fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<String>, String> {
     let package = parser::parse(document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
     evaluate_content_html(Node::Root(package.as_document().root()), Some(selector))
+}
+
+fn apply_content_cleanup(value: &str, selectors: &XPathSelectors) -> Result<String, String> {
+    let mut cleaned = value.to_string();
+    for rule in &selectors.content_cleanup {
+        let pattern = rule.pattern.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+        let regex =
+            Regex::new(pattern).map_err(|error| format!("Invalid cleanup regex: {error}"))?;
+        cleaned = regex
+            .replace_all(&cleaned, rule.replacement.as_str())
+            .to_string();
+    }
+    Ok(cleaned)
+}
+
+fn custom_fields_json(
+    node: Node<'_>,
+    selectors: &XPathSelectors,
+    scope: XPathCustomFieldScope,
+) -> Result<Option<String>, String> {
+    let mut fields = serde_json::Map::new();
+    for field in selectors
+        .custom_fields
+        .iter()
+        .filter(|field| field.scope == scope)
+    {
+        let key = field.key.trim();
+        let xpath = field.xpath.trim();
+        if key.is_empty() || xpath.is_empty() {
+            continue;
+        }
+        if let Some(value) = evaluate_optional_string(node, Some(xpath))? {
+            let mut entry = serde_json::Map::new();
+            entry.insert("value".to_string(), serde_json::Value::String(value));
+            if let Some(label) = field
+                .label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                entry.insert(
+                    "label".to_string(),
+                    serde_json::Value::String(label.to_string()),
+                );
+            }
+            fields.insert(key.to_string(), serde_json::Value::Object(entry));
+        }
+    }
+
+    if fields.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::Value::Object(fields).to_string()))
+    }
+}
+
+fn merge_tags_json(target: &mut Option<String>, incoming: Option<String>) -> Result<(), String> {
+    let Some(incoming) = incoming else {
+        return Ok(());
+    };
+    let mut base = target
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let incoming = serde_json::from_str::<serde_json::Value>(&incoming)
+        .map_err(|error| format!("Invalid custom field JSON: {error}"))?;
+    if let Some(object) = incoming.as_object() {
+        for (key, value) in object {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    *target = (!base.is_empty()).then(|| serde_json::Value::Object(base).to_string());
+    Ok(())
+}
+
+fn has_detail_custom_fields(selectors: &XPathSelectors) -> bool {
+    selectors
+        .custom_fields
+        .iter()
+        .any(|field| field.scope == XPathCustomFieldScope::Detail)
 }
 
 fn max_items_limit(selectors: &XPathSelectors) -> usize {
@@ -628,6 +738,9 @@ pub fn preview_xpath_document(
             continue;
         };
         let url = absolutize_url(base_url, &raw_url)?;
+        let content_text = preview_optional_string(item, selectors.content.as_deref())
+            .map(|text| apply_content_cleanup(&text, selectors))
+            .transpose()?;
 
         articles.push(ParsedArticle {
             external_id: Some(url.clone()),
@@ -636,13 +749,13 @@ pub fn preview_xpath_document(
             canonical_url: None,
             summary: preview_optional_string(item, selectors.summary.as_deref()),
             content_html: None,
-            content_text: preview_optional_string(item, selectors.content.as_deref()),
+            content_text,
             author: preview_optional_string(item, selectors.author.as_deref()),
             published_at: preview_optional_string(item, selectors.published_at.as_deref()),
             image_url: preview_optional_string(item, selectors.image.as_deref())
                 .map(|value| absolutize_url(base_url, &value))
                 .transpose()?,
-            tags_json: None,
+            tags_json: custom_fields_json(item, selectors, XPathCustomFieldScope::Item)?,
         });
     }
 
@@ -825,6 +938,25 @@ fn validate_selectors(selectors: &XPathSelectors) -> Result<(), String> {
     }
     if selectors.url.trim().is_empty() {
         return Err("XPath URL selector is required".to_string());
+    }
+    for rule in &selectors.content_cleanup {
+        let pattern = rule.pattern.trim();
+        if !pattern.is_empty() {
+            Regex::new(pattern).map_err(|error| format!("Invalid cleanup regex: {error}"))?;
+        }
+    }
+    for field in &selectors.custom_fields {
+        let xpath = field.xpath.trim();
+        if !xpath.is_empty() {
+            compile_xpath(xpath).map_err(|error| {
+                let key = field.key.trim();
+                if key.is_empty() {
+                    format!("Invalid custom field XPath: {error}")
+                } else {
+                    format!("Invalid custom field XPath for {key}: {error}")
+                }
+            })?;
+        }
     }
     Ok(())
 }
@@ -1147,6 +1279,7 @@ fn absolutize_url(base_url: &str, value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{ContentCleanupRule, XPathCustomField};
 
     fn selectors() -> XPathSelectors {
         XPathSelectors {
@@ -1159,8 +1292,10 @@ mod tests {
             cookie: None,
             content: Some(".//section/text()".to_string()),
             detail_content: None,
+            content_cleanup: Vec::new(),
             image: Some(".//img/@src".to_string()),
             next_page: None,
+            custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
         }
@@ -1207,6 +1342,58 @@ mod tests {
             feed.articles[0].url,
             "https://example.com/one?genre=a&secure=b"
         );
+    }
+
+    #[test]
+    fn cleans_content_and_extracts_custom_fields() {
+        let document = normalize_html_document(
+            r#"
+            <html><body>
+              <article>
+                <h2><a href="/one">First</a></h2>
+                <section><p>Keep me</p><aside class="ad">Buy now</aside></section>
+                <span class="views">123 views</span>
+              </article>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes");
+        let mut selectors = selectors();
+        selectors.content = Some(".//section".to_string());
+        selectors.content_cleanup = vec![ContentCleanupRule {
+            pattern: r#"(?is)<aside[^>]*>.*?</aside>"#.to_string(),
+            replacement: "".to_string(),
+        }];
+        selectors.custom_fields = vec![XPathCustomField {
+            key: "views".to_string(),
+            label: Some("Views".to_string()),
+            xpath: ".//span[contains(@class, 'views')]".to_string(),
+            scope: XPathCustomFieldScope::Item,
+        }];
+
+        let feed = parse_xpath_source("https://example.com/blog/", &document, &selectors)
+            .expect("xpath extracts with cleanup and fields");
+
+        assert_eq!(feed.articles.len(), 1);
+        assert!(feed.articles[0]
+            .content_html
+            .as_deref()
+            .expect("content html")
+            .contains("Keep me"));
+        assert!(!feed.articles[0]
+            .content_html
+            .as_deref()
+            .expect("content html")
+            .contains("Buy now"));
+        let tags: serde_json::Value = serde_json::from_str(
+            feed.articles[0]
+                .tags_json
+                .as_deref()
+                .expect("custom fields"),
+        )
+        .expect("custom field json");
+        assert_eq!(tags["views"]["label"], "Views");
+        assert_eq!(tags["views"]["value"], "123 views");
     }
 
     #[test]
@@ -1431,8 +1618,10 @@ mod tests {
             cookie: None,
             content: None,
             detail_content: None,
+            content_cleanup: Vec::new(),
             image: Some(".//img/@src".to_string()),
             next_page: None,
+            custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
         };
@@ -1479,8 +1668,10 @@ mod tests {
             cookie: None,
             content: None,
             detail_content: None,
+            content_cleanup: Vec::new(),
             image: None,
             next_page: None,
+            custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
         };
@@ -1548,8 +1739,29 @@ mod tests {
             cookie: None,
             content: None,
             detail_content: Some("//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]".to_string()),
+            content_cleanup: Vec::new(),
             image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
             next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
+            custom_fields: vec![
+                XPathCustomField {
+                    key: "section".to_string(),
+                    label: Some("Section".to_string()),
+                    xpath: ".//*[contains(@class, 'kmfoot')]/a[contains(@class, 'kmico_bk')][1]".to_string(),
+                    scope: XPathCustomFieldScope::Item,
+                },
+                XPathCustomField {
+                    key: "replies".to_string(),
+                    label: Some("Replies".to_string()),
+                    xpath: ".//*[contains(@class, 'kmpl')][1]".to_string(),
+                    scope: XPathCustomFieldScope::Item,
+                },
+                XPathCustomField {
+                    key: "views".to_string(),
+                    label: Some("Views".to_string()),
+                    xpath: ".//*[contains(@class, 'kmck')][1]".to_string(),
+                    scope: XPathCustomFieldScope::Item,
+                },
+            ],
             max_items: Some(20),
             plugin: None,
         };
@@ -1568,6 +1780,16 @@ mod tests {
             "https://forum.naixi.net/thread-11940-1-1.html"
         );
         assert_eq!(preview.articles[0].author.as_deref(), Some("gaoyici"));
+        let tags: serde_json::Value = serde_json::from_str(
+            preview.articles[0]
+                .tags_json
+                .as_deref()
+                .expect("custom fields"),
+        )
+        .expect("custom fields json");
+        assert_eq!(tags["section"]["value"], "日常");
+        assert_eq!(tags["replies"]["value"], "21");
+        assert_eq!(tags["views"]["value"], "948");
         assert_eq!(
             preview.next_page_url.as_deref(),
             Some("https://forum.naixi.net/forum-64-2.html")
@@ -1654,8 +1876,10 @@ mod tests {
             cookie: None,
             content: None,
             detail_content: None,
+            content_cleanup: Vec::new(),
             image: None,
             next_page: None,
+            custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
         };

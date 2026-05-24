@@ -1079,8 +1079,10 @@ mod tests {
             cookie: None,
             content: None,
             detail_content: None,
+            content_cleanup: Vec::new(),
             image: None,
             next_page: None,
+            custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
         };

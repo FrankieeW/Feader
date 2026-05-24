@@ -91,10 +91,30 @@ type XPathSelectors = {
   cookie?: string;
   content?: string;
   detailContent?: string;
+  contentCleanup?: ContentCleanupRule[];
   image?: string;
   nextPage?: string;
+  customFields?: XPathCustomField[];
   maxItems?: number;
   plugin?: XPathSourcePluginInfo;
+};
+
+type ContentCleanupRule = {
+  pattern: string;
+  replacement?: string;
+};
+
+type XPathCustomField = {
+  key: string;
+  label?: string;
+  xpath: string;
+  scope?: "item" | "detail";
+};
+
+type ParsedArticleCustomField = {
+  key: string;
+  label: string;
+  value: string;
 };
 
 type XPathSourceSuggestion = {
@@ -171,6 +191,12 @@ type ParsedArticle = {
   author?: string | null;
   contentText?: string | null;
   imageUrl?: string | null;
+  tagsJson?: string | null;
+};
+
+type ArticleCustomFieldValue = {
+  label?: string;
+  value: string;
 };
 
 type XPathFieldDiagnostic = {
@@ -227,8 +253,10 @@ const defaultXPathSelectors: XPathSelectors = {
   cookie: "",
   content: ".",
   detailContent: "",
+  contentCleanup: [],
   image: ".//img/@src",
   nextPage: "",
+  customFields: [],
   maxItems: undefined,
   plugin: undefined,
 };
@@ -244,8 +272,10 @@ const xpathPresets: Record<string, XPathSelectors> = {
     cookie: "",
     content: ".//section",
     detailContent: "",
+    contentCleanup: [],
     image: ".//img/@src",
     nextPage: "//a[@rel='next']/@href",
+    customFields: [],
     maxItems: undefined,
     plugin: undefined,
   },
@@ -259,8 +289,10 @@ const xpathPresets: Record<string, XPathSelectors> = {
     cookie: "",
     content: "",
     detailContent: "",
+    contentCleanup: [],
     image: ".//img/@src",
     nextPage: "",
+    customFields: [],
     maxItems: undefined,
     plugin: undefined,
   },
@@ -455,8 +487,17 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           cookie: "",
           content: "",
           detailContent: "//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]",
+          contentCleanup: [
+            { pattern: "(?is)<div\\s+class=\"quote\".*?</div>", replacement: "" },
+            { pattern: "(?is)<ignore_js_op>.*?</ignore_js_op>", replacement: "" },
+          ],
           image: ".//a[contains(@class, 'kmimg')]//img/@src",
           nextPage: "//a[contains(@class, 'nxt')]/@href",
+          customFields: [
+            { key: "section", label: "Section", xpath: ".//*[contains(@class, 'kmfoot')]/a[contains(@class, 'kmico_bk')][1]", scope: "item" },
+            { key: "replies", label: "Replies", xpath: ".//*[contains(@class, 'kmpl')][1]", scope: "item" },
+            { key: "views", label: "Views", xpath: ".//*[contains(@class, 'kmck')][1]", scope: "item" },
+          ],
           maxItems: 20,
           plugin: undefined,
         },
@@ -1744,6 +1785,7 @@ function App() {
                 </div>
                 <h2>{article.title}</h2>
                 {article.summary ? <p>{stripHtml(article.summary)}</p> : null}
+                <ArticleCustomFields article={article} />
                 <div className="story-actions">
                   <button onClick={(event) => {
                     event.stopPropagation();
@@ -2739,6 +2781,8 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
     ["Image", selectors.image],
     ["Next page", selectors.nextPage],
     ["Max items", selectors.maxItems ? String(selectors.maxItems) : undefined],
+    ["Cleanup rules", selectors.contentCleanup?.length ? `${selectors.contentCleanup.length} configured` : undefined],
+    ["Custom fields", customFieldSummary(selectors.customFields)],
   ];
   return (
     <dl className="xpath-selector-summary">
@@ -2985,6 +3029,7 @@ function ReaderArticle({
       </div>
       <h2>{article.title}</h2>
       {article.author ? <p className="byline">{article.author}</p> : null}
+      <ArticleCustomFields article={article} />
       <div className="reader-actions">
         <button onClick={() => onToggleRead(article)} type="button">
           {article.read ? "Mark unread" : "Mark read"}
@@ -3025,6 +3070,21 @@ function ReaderArticle({
         )}
       </div>
     </article>
+  );
+}
+
+function ArticleCustomFields({ article }: { article: { tagsJson?: string | null } }) {
+  const fields = parseArticleCustomFields(article.tagsJson);
+  if (fields.length === 0) return null;
+  return (
+    <dl className="article-custom-fields">
+      {fields.map((field) => (
+        <div key={field.key}>
+          <dt>{field.label}</dt>
+          <dd>{field.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -3364,6 +3424,20 @@ function XPathSourceForm({
           onChange={onSelectorsChange}
           selectors={selectors}
         />
+        <JsonArrayInput
+          disabled={isBusy}
+          label="Content cleanup"
+          onChange={(contentCleanup) => onSelectorsChange({ ...selectors, contentCleanup })}
+          placeholder='[{"pattern":"(?is)<aside.*?</aside>","replacement":""}]'
+          value={selectors.contentCleanup ?? []}
+        />
+        <JsonArrayInput
+          disabled={isBusy}
+          label="Custom fields"
+          onChange={(customFields) => onSelectorsChange({ ...selectors, customFields })}
+          placeholder='[{"key":"views","label":"Views","xpath":".//span[@class=\"views\"]","scope":"item"}]'
+          value={selectors.customFields ?? []}
+        />
       </details>
       {aiAvailable ? (
         <button disabled={isBusy} onClick={onSuggest} type="button">
@@ -3402,6 +3476,7 @@ function XPathSourceForm({
             <article key={article.url}>
               <strong>{article.title}</strong>
               <span>{article.url}</span>
+              <ArticleCustomFields article={article} />
               {article.summary ? <p>{article.summary}</p> : null}
               {article.author ? <em>{article.author}</em> : null}
             </article>
@@ -3409,6 +3484,61 @@ function XPathSourceForm({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function JsonArrayInput<T>({
+  disabled,
+  label,
+  onChange,
+  placeholder,
+  value,
+}: {
+  disabled: boolean;
+  label: string;
+  onChange: (value: T[]) => void;
+  placeholder: string;
+  value: T[];
+}) {
+  const serialized = JSON.stringify(value, null, 2);
+  const [draft, setDraft] = useState(serialized);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(serialized);
+    setError(null);
+  }, [serialized]);
+
+  return (
+    <label className="selector-input selector-json-input">
+      <span>{label}</span>
+      <textarea
+        disabled={disabled}
+        onChange={(event) => {
+          const nextDraft = event.currentTarget.value;
+          setDraft(nextDraft);
+          try {
+            const parsed = JSON.parse(nextDraft || "[]");
+            if (!Array.isArray(parsed)) {
+              setError("Expected a JSON array.");
+              return;
+            }
+            setError(null);
+            onChange(parsed as T[]);
+          } catch (parseError) {
+            setError(parseError instanceof Error ? parseError.message : "Invalid JSON.");
+          }
+        }}
+        placeholder={placeholder}
+        rows={5}
+        value={draft}
+      />
+      {error ? (
+        <small className="selector-hint selector-error">{error}</small>
+      ) : (
+        <small className="selector-hint">JSON array. Regex patterns run after XPath content extraction.</small>
+      )}
+    </label>
   );
 }
 
@@ -3458,8 +3588,10 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     cookie: emptyToUndefined(selectors.cookie),
     content: emptyToUndefined(selectors.content),
     detailContent: emptyToUndefined(selectors.detailContent),
+    contentCleanup: normalizeContentCleanup(selectors.contentCleanup),
     image: emptyToUndefined(selectors.image),
     nextPage: emptyToUndefined(selectors.nextPage),
+    customFields: normalizeCustomFields(selectors.customFields),
     maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
     plugin: selectors.plugin,
   };
@@ -3476,8 +3608,10 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     cookie: selectors.cookie?.trim() || "",
     content: selectors.content?.trim() || "",
     detailContent: selectors.detailContent?.trim() || "",
+    contentCleanup: normalizeContentCleanup(selectors.contentCleanup) ?? [],
     image: selectors.image?.trim() || "",
     nextPage: selectors.nextPage?.trim() || "",
+    customFields: normalizeCustomFields(selectors.customFields) ?? [],
     maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
     plugin: selectors.plugin,
   };
@@ -3503,6 +3637,62 @@ function cookieSummary(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   return trimmed.startsWith("$") ? trimmed : "Set";
+}
+
+function customFieldSummary(fields?: XPathCustomField[]): string | undefined {
+  const normalized = normalizeCustomFields(fields);
+  if (!normalized?.length) return undefined;
+  return normalized.map((field) => `${field.label || field.key} (${field.scope ?? "item"})`).join(", ");
+}
+
+function normalizeContentCleanup(rules?: ContentCleanupRule[]): ContentCleanupRule[] | undefined {
+  const normalized = (rules ?? [])
+    .map((rule) => ({
+      pattern: rule.pattern?.trim() ?? "",
+      replacement: rule.replacement ?? "",
+    }))
+    .filter((rule) => rule.pattern);
+  return normalized.length ? normalized : undefined;
+}
+
+function normalizeCustomFields(fields?: XPathCustomField[]): XPathCustomField[] | undefined {
+  const normalized = (fields ?? [])
+    .map((field) => ({
+      key: field.key?.trim() ?? "",
+      label: field.label?.trim() || undefined,
+      xpath: field.xpath?.trim() ?? "",
+      scope: field.scope === "detail" ? "detail" as const : "item" as const,
+    }))
+    .filter((field) => field.key && field.xpath);
+  return normalized.length ? normalized : undefined;
+}
+
+function parseArticleCustomFields(tagsJson?: string | null): ParsedArticleCustomField[] {
+  if (!tagsJson?.trim()) return [];
+  try {
+    const parsed = JSON.parse(tagsJson) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    return Object.entries(parsed)
+      .map(([key, raw]) => {
+        if (typeof raw === "string") {
+          return { key, label: key, value: raw };
+        }
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          return null;
+        }
+        const field = raw as Partial<ArticleCustomFieldValue>;
+        const value = typeof field.value === "string" ? field.value.trim() : "";
+        if (!value) return null;
+        return {
+          key,
+          label: typeof field.label === "string" && field.label.trim() ? field.label.trim() : key,
+          value,
+        };
+      })
+      .filter((field): field is ParsedArticleCustomField => Boolean(field));
+  } catch {
+    return [];
+  }
 }
 
 function parseOptionalPositiveInt(value: string): number | undefined {

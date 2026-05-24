@@ -152,12 +152,46 @@ pub struct XPathSelectors {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_cleanup: Vec<ContentCleanupRule>,
     pub image: Option<String>,
     pub next_page: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_fields: Vec<XPathCustomField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_items: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<XPathSourcePluginInfo>,
+}
+
+/// A regex replacement applied to extracted article body HTML.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentCleanupRule {
+    pub pattern: String,
+    #[serde(default)]
+    pub replacement: String,
+}
+
+/// A non-standard metadata field extracted from either a list item or detail page.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathCustomField {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub xpath: String,
+    #[serde(default)]
+    pub scope: XPathCustomFieldScope,
+}
+
+/// Where a custom XPath field is evaluated.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum XPathCustomFieldScope {
+    #[default]
+    Item,
+    Detail,
 }
 
 /// Plugin metadata copied into a source config when it is created from Hub.
