@@ -189,7 +189,8 @@ async fn load_registry_packs(
     let markets = load_plugin_markets(database)?;
     let installed_ids = installed_plugin_ids(database)?;
     let mut all_packs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_sources = std::collections::HashSet::new();
+    let mut remote_ids = std::collections::HashSet::new();
 
     for market in markets {
         let index = match load_market_index(database, &market, force_refresh).await {
@@ -200,9 +201,11 @@ async fn load_registry_packs(
             }
         };
         for entry in index.plugins {
-            if !seen_ids.insert(entry.id.clone()) {
+            let source_key = marketplace_source_key(&market.id, &entry);
+            if !seen_sources.insert(source_key) {
                 continue;
             }
+            remote_ids.insert(entry.id.clone());
 
             let cache_key = market_plugin_cache_key(&market.id, &entry);
             let pack_json = if force_refresh {
@@ -235,16 +238,20 @@ async fn load_registry_packs(
             all_packs.push(MarketplacePluginPack {
                 installed: installed_ids.contains(&pack.id),
                 source_market_id: Some(market.id.clone()),
+                source_market_name: Some(market.name.clone()),
+                source_market_repository: Some(market.repository.clone()),
                 pack,
             });
         }
     }
 
     for pack in database.list_installed_plugin_packs()? {
-        if seen_ids.insert(pack.id.clone()) {
+        if !remote_ids.contains(&pack.id) {
             all_packs.push(MarketplacePluginPack {
                 installed: true,
                 source_market_id: None,
+                source_market_name: None,
+                source_market_repository: None,
                 pack,
             });
         }
@@ -284,6 +291,10 @@ async fn fetch_and_cache_market_index(
     let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
     database.set_cache(&format!("registry_index_{}", market.id), &json)?;
     Ok(index)
+}
+
+fn marketplace_source_key(market_id: &str, entry: &models::RegistryPluginEntry) -> String {
+    format!("{}:{}:{}", market_id, entry.id, entry.version)
 }
 
 fn market_plugin_cache_key(market_id: &str, entry: &models::RegistryPluginEntry) -> String {
@@ -1536,6 +1547,23 @@ mod tests {
             &official,
             &stale_index
         ));
+    }
+
+    #[test]
+    fn marketplace_source_key_distinguishes_same_plugin_from_different_markets() {
+        let entry = models::RegistryPluginEntry {
+            id: "official.cyberpunk-ui.view".to_string(),
+            name: "Cyberpunk UI Theme".to_string(),
+            version: "0.1.0".to_string(),
+            kind: models::PLUGIN_KIND_APP_UI_THEME.to_string(),
+            manifest: "plugins/official.cyberpunk-ui.view/manifest.json".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+
+        assert_ne!(
+            marketplace_source_key("official-feaderhub", &entry),
+            marketplace_source_key("github-frankiee-feaderhub-fork", &entry)
+        );
     }
 }
 

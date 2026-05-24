@@ -385,6 +385,10 @@ pub struct MarketplacePluginPack {
     pub installed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_market_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_market_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_market_repository: Option<String>,
 }
 
 /// A configured plugin marketplace repository.

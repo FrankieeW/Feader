@@ -293,6 +293,8 @@ type XPathRulePack = {
 type MarketplacePluginPack = XPathRulePack & {
   installed: boolean;
   sourceMarketId?: string | null;
+  sourceMarketName?: string | null;
+  sourceMarketRepository?: string | null;
 };
 
 type PluginMarket = {
@@ -1108,6 +1110,8 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
         ...pack,
         installed: testModeInstalledPluginIds.has(pack.id),
         sourceMarketId: "official-feaderhub",
+        sourceMarketName: "FeaderHub Official",
+        sourceMarketRepository: "https://github.com/FrankieeW/FeaderHub",
       })) as T;
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
@@ -3043,6 +3047,7 @@ function App() {
                       <div className="hub-card-header">
                         <span className="hub-card-name">{pack.name}</span>
                         <span className="hub-card-version">v{pack.version}</span>
+                        <span className="hub-card-market">{pluginMarketLabel(pack)}</span>
                         <span className={`hub-card-trust hub-trust-${pack.trust.includes("bundled") ? "official" : pack.trust}`}>
                           {pack.trust.includes("bundled") ? "official" : pack.trust}
                         </span>
@@ -3101,6 +3106,7 @@ function App() {
                       <div className="hub-card-header">
                         <span className="hub-card-name">{pack.name}</span>
                         <span className="hub-card-version">v{pack.version}</span>
+                        <span className="hub-card-market">{pluginMarketLabel(pack)}</span>
                         <span className={`hub-card-trust hub-trust-${pack.trust.includes("bundled") ? "official" : pack.trust}`}>
                           {pack.trust.includes("bundled") ? "official" : pack.trust}
                         </span>
@@ -4944,6 +4950,19 @@ function pluginMetaLabel(pack: XPathRulePack): string {
     return pack.capabilities.join(", ");
   }
   return pack.candidates.map((candidate) => candidate.pageType).join(", ");
+}
+
+function pluginMarketLabel(pack: MarketplacePluginPack): string {
+  if (!pack.sourceMarketId) {
+    return "Local";
+  }
+  const repository = pack.sourceMarketRepository ?? "";
+  const owner = repository
+    .replace(/^https?:\/\/github.com\//, "")
+    .replace(/\.git$/, "")
+    .split("/")[0];
+  const market = owner || pack.sourceMarketName || pack.sourceMarketId;
+  return `${market} · v${pack.version}`;
 }
 
 function appUiPluginFromPack(pack: { id: string }): AppUiPluginId {
