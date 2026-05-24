@@ -1485,6 +1485,20 @@ mod tests {
         );
         assert_eq!(market.name, "Example Market");
     }
+
+    #[test]
+    fn official_feaderhub_market_uses_official_trust() {
+        let official = plugin_registry::official_plugin_market();
+        assert_eq!(plugin_registry::market_trust(&official), "official");
+
+        let community = plugin_market_from_github(&AddPluginMarketRequest {
+            repository: "https://github.com/example/feader-market".to_string(),
+            name: None,
+            branch: None,
+        })
+        .expect("market parses");
+        assert_eq!(plugin_registry::market_trust(&community), "community");
+    }
 }
 
 // ── Auto-refresh Tauri commands ────────────────────────────────────

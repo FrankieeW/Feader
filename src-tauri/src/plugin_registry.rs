@@ -110,8 +110,21 @@ pub async fn fetch_remote_plugin_pack_from_market(
     market: &PluginMarket,
     entry: &RegistryPluginEntry,
 ) -> Result<XPathRulePack, String> {
-    fetch_remote_plugin_pack_from_base(entry, &market.raw_base_url, &market.repository, "community")
-        .await
+    fetch_remote_plugin_pack_from_base(
+        entry,
+        &market.raw_base_url,
+        &market.repository,
+        market_trust(market),
+    )
+    .await
+}
+
+pub fn market_trust(market: &PluginMarket) -> &'static str {
+    let repository = market.repository.trim_end_matches(".git");
+    if market.id == "official-feaderhub" || repository == OFFICIAL_REGISTRY {
+        return "official";
+    }
+    "community"
 }
 
 async fn fetch_remote_plugin_pack_from_base(
