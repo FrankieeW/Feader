@@ -90,6 +90,7 @@
 - Compatibility constraints: theme preference stored in `localStorage`, system mode driven by `prefers-color-scheme`.
 - HTML safety: untrusted feed `content_html` is sanitized at the Rust ingest boundary with `ammonia` and again at render time with `DOMPurify` (defense-in-depth); the reader never renders raw feed HTML.
 - XPath sources: real-world HTML is normalized (html5ever -> XHTML) before sxd-xpath extraction; the content selector can capture sanitized `content_html`; refresh follows `nextPage` up to a fixed page cap.
+- AI: optional provider config (Anthropic or OpenAI-compatible) is stored in the backend with literal keys masked and `$ENV` references resolved at call time; `$ENV` is preferred because it avoids storing the secret in SQLite. The first AI consumer suggests XPath selectors from the same normalized DOM pipeline that extraction uses, and the user validates suggestions via the existing preview. See `docs/ai-configuration.md`.
 - Test/screenshot expectations: run build checks; use browser verification when the in-app browser is available.
 
 ## Open questions
