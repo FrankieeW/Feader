@@ -97,6 +97,7 @@ type XPathSelectors = {
   customFields?: XPathCustomField[];
   maxItems?: number;
   plugin?: XPathSourcePluginInfo;
+  reader?: ReaderConfig | null;
 };
 
 type ContentCleanupRule = {
@@ -160,6 +161,38 @@ type PluginParameters = {
   defaults?: PluginDefaults;
 };
 
+type ReaderLayout = {
+  typography?: "system" | "serif" | "large";
+  width?: "narrow" | "normal" | "wide";
+  immersive?: boolean;
+};
+
+type ReaderConfig = {
+  removeSelectors?: string[];
+  resolveRelativeUrls?: boolean;
+  rewriteLinks?: boolean;
+  showCustomFields?: boolean;
+  layout?: ReaderLayout | null;
+  css?: string | null;
+};
+
+type PluginAuth = {
+  checkUrl: string;
+  loggedInXPath: string;
+};
+
+type PluginCredential = {
+  pluginId: string;
+  cookieSet: boolean;
+  cookieReference?: string | null;
+  updatedAt?: string | null;
+  lastCheckedAt?: string | null;
+  lastCheckOk?: boolean | null;
+  lastCheckMessage?: string | null;
+};
+
+type CredentialCheck = { ok: boolean; message: string; checkedAt: string };
+
 type XPathRulePack = {
   id: string;
   name: string;
@@ -173,6 +206,7 @@ type XPathRulePack = {
   candidates: XPathRuleCandidate[];
   authors?: PluginAuthor[];
   parameters?: PluginParameters | null;
+  auth?: PluginAuth | null;
 };
 
 type PluginAuthor = {
@@ -502,9 +536,20 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           ],
           maxItems: 20,
           plugin: undefined,
+          reader: {
+            removeSelectors: ["//ignore_js_op", "//*[contains(@class,'quote')]"],
+            resolveRelativeUrls: true,
+            rewriteLinks: true,
+            showCustomFields: true,
+            layout: { typography: "serif", width: "normal", immersive: false },
+          },
         },
       },
     ],
+    auth: {
+      checkUrl: "https://forum.naixi.net/home.php?mod=spacecp",
+      loggedInXPath: "//a[contains(@href,'logout') or contains(@href,'action=logout')]",
+    },
     parameters: {
       urlTemplate: "https://forum.naixi.net/{sectionId}.html",
       sections: [
@@ -720,6 +765,12 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       );
       return testModeSourceState.find((source) => source.id === sourceId) as T;
     }
+    case "get_plugin_credential":
+      return { pluginId: String(args?.pluginId ?? ""), cookieSet: false } as T;
+    case "set_plugin_credential":
+      return { pluginId: String(args?.pluginId ?? ""), cookieSet: Boolean(String(args?.cookie ?? "").trim()) } as T;
+    case "check_plugin_credential":
+      return { ok: true, message: "测试模式:已登录", checkedAt: new Date().toISOString() } as T;
     default:
       throw new Error(`Test mode command '${command}' is not implemented.`);
   }
