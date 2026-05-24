@@ -1,6 +1,7 @@
 //! Feader Tauri command surface and application bootstrap.
 
 pub mod cli;
+mod ai;
 mod db;
 mod feed_adapter;
 mod models;
@@ -11,7 +12,7 @@ use std::fs;
 use db::AppDatabase;
 use hex::FromHex;
 use models::{
-    AddSourceRequest, AddXPathSourceRequest, Article, ArticleFilter,
+    AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
     CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, Source, SourceRefreshResult,
     UpdateSourceTitleRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
     XPathPreview, XPathSelectors,
@@ -83,6 +84,41 @@ async fn verify_wallet_login(
 #[tauri::command]
 fn disconnect_wallet_login(database: tauri::State<'_, AppDatabase>) -> Result<(), String> {
     database.disconnect_wallet_session()
+}
+
+/// Return AI settings (API key masked).
+#[tauri::command]
+fn get_ai_settings(database: tauri::State<'_, AppDatabase>) -> Result<AiSettings, String> {
+    database.get_ai_settings()
+}
+
+/// Save AI settings (blank api_key keeps the existing key).
+#[tauri::command]
+fn set_ai_settings(
+    input: AiSettingsInput,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<AiSettings, String> {
+    database.set_ai_settings(&input)
+}
+
+/// Suggest XPath selectors for a page using the configured AI provider.
+#[tauri::command]
+async fn suggest_xpath_source(
+    url: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<XPathSelectors, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("XPath source URL is required".to_string());
+    }
+
+    let settings = database.get_ai_settings()?;
+    if !settings.enabled || !settings.api_key_set {
+        return Err("AI is not configured".to_string());
+    }
+    let raw_key = database.raw_ai_api_key()?;
+    let html = xpath_adapter::fetch_normalized(url).await?;
+    ai::suggest_xpath_selectors(&settings, &raw_key, &html).await
 }
 
 /// Add a feed source after validating that it can be parsed.
@@ -325,6 +361,9 @@ pub fn run() {
             get_wallet_session,
             verify_wallet_login,
             disconnect_wallet_login,
+            get_ai_settings,
+            set_ai_settings,
+            suggest_xpath_source,
             add_source,
             preview_xpath_source,
             add_xpath_source,

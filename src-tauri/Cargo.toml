@@ -27,7 +27,7 @@ chrono = { version = "0.4", features = ["serde"] }
 feed-rs = "2"
 html5ever = "0.39"
 markup5ever_rcdom = "0.39"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sxd-document = "0.3"
 sxd-xpath = "0.4"
