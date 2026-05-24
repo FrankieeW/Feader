@@ -874,6 +874,7 @@ function App() {
   const [selectedManagerSourceId, setSelectedManagerSourceId] = useState<number | undefined>();
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [readerView, setReaderView] = useState<ReaderView>("none");
+  const [userChoseTypography, setUserChoseTypography] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [sourceInputMode, setSourceInputMode] = useState<SourceInputMode>("rss");
   const [activeView, setActiveView] = useState<ViewMode>("reader");
@@ -2423,7 +2424,7 @@ function App() {
               </div>
               <ReaderTypographyControl
                 mode={readerTypography}
-                onChange={setReaderTypography}
+                onChange={(mode) => { setUserChoseTypography(true); setReaderTypography(mode); }}
               />
               <dl>
                 <dt>Body</dt>
