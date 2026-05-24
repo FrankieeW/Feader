@@ -537,7 +537,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           maxItems: 20,
           plugin: undefined,
           reader: {
-            removeSelectors: ["//ignore_js_op", "//*[contains(@class,'quote')]"],
+            removeSelectors: ["//ignore_js_op", "//*[contains(concat(' ', normalize-space(@class), ' '), ' quote ')]"],
             resolveRelativeUrls: true,
             rewriteLinks: true,
             showCustomFields: true,

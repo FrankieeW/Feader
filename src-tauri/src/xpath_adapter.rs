@@ -587,6 +587,9 @@ pub fn apply_reader_transforms(
             out = out.replace(&fragment, "");
         }
     }
+    // Both flags drive URL absolutization today. `rewriteLinks` is reserved for
+    // future strategies (e.g., proxy/mirror rewriting) while `resolveRelativeUrls`
+    // covers the common relative→absolute case.
     if reader.resolve_relative_urls || reader.rewrite_links {
         if let Ok(base) = url::Url::parse(base_url) {
             out = rewrite_attr_urls(&out, &base, "href");
