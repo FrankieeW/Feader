@@ -245,6 +245,51 @@ impl AppDatabase {
         Ok(key)
     }
 
+    /// Cache a value from the remote registry.
+    pub fn set_cache(&self, key: &str, value: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO registry_cache (key, value, fetched_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at",
+                params![key, value, now_string()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Read a cached registry value. Returns None if the key is not found or
+    /// the cache is older than `max_age_seconds`.
+    pub fn get_cache(&self, key: &str, max_age_seconds: i64) -> Result<Option<String>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let row = connection
+            .query_row(
+                "SELECT value, fetched_at FROM registry_cache WHERE key = ?1",
+                params![key],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+
+        let Some((value, fetched_at)) = row else {
+            return Ok(None);
+        };
+
+        let fetched = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+            .map_err(|error| error.to_string())?;
+        let age = Utc::now() - fetched.with_timezone(&Utc);
+        if age.num_seconds() > max_age_seconds {
+            return Ok(None);
+        }
+
+        Ok(Some(value))
+    }
+
     /// Upsert AI settings; a blank `api_key` keeps the existing stored key.
     pub fn set_ai_settings(&self, input: &AiSettingsInput) -> Result<AiSettings, String> {
         let now = now_string();
@@ -724,6 +769,12 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             api_key TEXT NOT NULL DEFAULT '',
             enabled INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS registry_cache (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            fetched_at TEXT NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);

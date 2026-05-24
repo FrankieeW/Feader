@@ -14,10 +14,10 @@ use db::AppDatabase;
 use hex::FromHex;
 use models::{
     AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
-    CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, Source, SourceRefreshResult,
-    UpdateSourceTitleRequest, UpdateXPathSourceRequest, VerifyWalletLoginRequest,
-    WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack, XPathSelectors,
-    XPathSourceSuggestion,
+    CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, RegistryIndex, Source,
+    SourceRefreshResult, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
+    VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack,
+    XPathSelectors, XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use tauri::Manager;
@@ -107,6 +107,62 @@ fn set_ai_settings(
 #[tauri::command]
 fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
     plugin_registry::bundled_xpath_rule_packs()
+}
+
+const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
+
+/// Fetch the plugin registry from the remote FeaderHub repository and merge
+/// with bundled packs. Results are cached locally with a 24-hour TTL.
+#[tauri::command]
+async fn fetch_registry_packs(
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<XPathRulePack>, String> {
+    let registry_json = match database.get_cache("registry_index", REGISTRY_CACHE_TTL_SECONDS)? {
+        Some(cached) => cached,
+        None => {
+            let index = plugin_registry::fetch_registry_index().await?;
+            let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
+            database.set_cache("registry_index", &json)?;
+            json
+        }
+    };
+
+    let index: RegistryIndex =
+        serde_json::from_str(&registry_json).map_err(|error| error.to_string())?;
+
+    let mut all_packs = plugin_registry::bundled_xpath_rule_packs();
+    let bundled_ids: std::collections::HashSet<String> =
+        all_packs.iter().map(|pack| pack.id.clone()).collect();
+
+    for entry in index.plugins {
+        if bundled_ids.contains(&entry.id) {
+            continue;
+        }
+
+        let cache_key = format!("plugin_pack_{}", entry.id);
+        let pack_json = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
+            Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
+            None => None,
+        };
+
+        if let Some(pack) = pack_json {
+            all_packs.push(pack);
+        } else {
+            match plugin_registry::fetch_remote_plugin_pack(&entry.manifest).await {
+                Ok(pack) => {
+                    if let Ok(json) = serde_json::to_string(&pack) {
+                        let _ = database.set_cache(&cache_key, &json);
+                    }
+                    all_packs.push(pack);
+                }
+                Err(error) => {
+                    eprintln!("Failed to fetch plugin {}: {error}", entry.id);
+                }
+            }
+        }
+    }
+
+    Ok(all_packs)
 }
 
 /// Suggest XPath selectors for a page using the configured AI provider.
@@ -402,6 +458,7 @@ pub fn run() {
             get_ai_settings,
             set_ai_settings,
             list_xpath_plugin_packs,
+            fetch_registry_packs,
             suggest_xpath_source,
             add_source,
             preview_xpath_source,

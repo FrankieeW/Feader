@@ -107,6 +107,23 @@ type XPathRuleCandidate = {
   selectors: XPathSelectors;
 };
 
+type PluginSection = {
+  id: string;
+  path: string[];
+  url: string;
+};
+
+type PluginDefaults = {
+  maxItems?: number;
+  maxPages?: number;
+};
+
+type PluginParameters = {
+  urlTemplate?: string;
+  sections?: PluginSection[];
+  defaults?: PluginDefaults;
+};
+
 type XPathRulePack = {
   id: string;
   name: string;
@@ -117,6 +134,7 @@ type XPathRulePack = {
   description: string;
   capabilities: string[];
   candidates: XPathRuleCandidate[];
+  parameters?: PluginParameters | null;
 };
 
 type ParsedArticle = {
@@ -432,6 +450,38 @@ const testModeXPathRulePacks: XPathRulePack[] = [
       },
     ],
   },
+  {
+    id: "official.naixi-forum.xpath",
+    name: "Naixi Forum XPath Rules",
+    version: "0.1.0",
+    apiVersion: "xpath-rule-pack/v1",
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "official",
+    description: "XPath and AI prompt rules for naixi.net Discuz forum thread lists with section-based browsing.",
+    capabilities: ["xpath.selectorCandidates", "ai.promptRules"],
+    candidates: [
+      {
+        id: "naixi-forum-thread-list",
+        pageType: "forum-thread-list",
+        priority: 90,
+        detect: ["threadlisttableid", "normalthread_", "forum.naixi.net"],
+        promptRule: "Naixi/Discuz forum thread list",
+        selectors: defaultXPathSelectors,
+      },
+    ],
+    parameters: {
+      urlTemplate: "https://forum.naixi.net/{sectionId}.html",
+      sections: [
+        { id: "forum-64-1", path: ["板块", "内容区", "茶馆", "日常"], url: "https://forum.naixi.net/forum-64-1.html" },
+        { id: "forum-64-2", path: ["板块", "内容区", "茶馆", "交易"], url: "https://forum.naixi.net/forum-64-2.html" },
+        { id: "forum-64-3", path: ["板块", "内容区", "茶馆", "数科"], url: "https://forum.naixi.net/forum-64-3.html" },
+        { id: "forum-65-1", path: ["板块", "内容区", "技术", "建站"], url: "https://forum.naixi.net/forum-65-1.html" },
+        { id: "forum-65-2", path: ["板块", "内容区", "技术", "编程"], url: "https://forum.naixi.net/forum-65-2.html" },
+        { id: "forum-62-1", path: ["板块", "站务区", "公告"], url: "https://forum.naixi.net/forum-62-1.html" },
+      ],
+      defaults: { maxItems: 20, maxPages: 3 },
+    },
+  },
 ];
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -542,6 +592,8 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       return testModeAiSettings as T;
     }
     case "list_xpath_plugin_packs":
+      return testModeXPathRulePacks as T;
+    case "fetch_registry_packs":
       return testModeXPathRulePacks as T;
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
@@ -757,6 +809,17 @@ function App() {
   const [editXPathStatus, setEditXPathStatus] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
   const [xpathRulePacks, setXPathRulePacks] = useState<XPathRulePack[]>([]);
+  const [hubSearchQuery, setHubSearchQuery] = useState("");
+  const [hubCategory, setHubCategory] = useState("all");
+  const [showPluginDialog, setShowPluginDialog] = useState<XPathRulePack | null>(null);
+  const [dialogUrl, setDialogUrl] = useState("");
+  const [dialogTitle, setDialogTitle] = useState("");
+  const [dialogSectionId, setDialogSectionId] = useState("");
+  const [dialogMaxItems, setDialogMaxItems] = useState(20);
+  const [dialogMaxPages, setDialogMaxPages] = useState(3);
+  const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
+  const [dialogStatus, setDialogStatus] = useState<string | null>(null);
+  const [isDialogBusy, setIsDialogBusy] = useState(false);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
   const [isBusy, setIsBusy] = useState(false);
@@ -837,6 +900,48 @@ function App() {
 
   const sourceGroups = useMemo(() => groupSourcesByCategory(sources), [sources]);
 
+  const hubCategories = useMemo(() => {
+    const cats = new Set<string>();
+    for (const pack of xpathRulePacks) {
+      for (const c of pack.candidates) {
+        if (c.pageType.includes("forum")) cats.add("Forum");
+        else if (c.pageType.includes("video")) cats.add("Video");
+        else if (c.pageType.includes("article")) cats.add("Article");
+        else cats.add("Other");
+      }
+    }
+    return ["all", ...cats];
+  }, [xpathRulePacks]);
+
+  const filteredPacks = useMemo(() => {
+    const query = hubSearchQuery.trim().toLowerCase();
+    return xpathRulePacks.filter((pack) => {
+      if (hubCategory !== "all") {
+        const matchesCat = pack.candidates.some((c) => {
+          const pt = c.pageType.toLowerCase();
+          return pt.includes(hubCategory.toLowerCase());
+        });
+        if (!matchesCat) return false;
+      }
+      if (!query) return true;
+      return (
+        pack.name.toLowerCase().includes(query) ||
+        pack.description.toLowerCase().includes(query) ||
+        pack.capabilities.some((cap) => cap.toLowerCase().includes(query))
+      );
+    });
+  }, [xpathRulePacks, hubSearchQuery, hubCategory]);
+
+  const officialPacks = useMemo(
+    () => filteredPacks.filter((p) => p.trust === "bundled-official" || p.trust === "official"),
+    [filteredPacks],
+  );
+
+  const communityPacks = useMemo(
+    () => filteredPacks.filter((p) => p.trust !== "bundled-official" && p.trust !== "official"),
+    [filteredPacks],
+  );
+
   useEffect(() => {
     if (activeView !== "sources") {
       return;
@@ -873,8 +978,89 @@ function App() {
   }
 
   async function loadXPathPluginPacks(): Promise<void> {
-    const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
-    setXPathRulePacks(packs);
+    try {
+      const packs = await invoke<XPathRulePack[]>("fetch_registry_packs");
+      setXPathRulePacks(packs);
+    } catch {
+      const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
+      setXPathRulePacks(packs);
+    }
+  }
+
+  function openPluginDialog(pack: XPathRulePack): void {
+    const sections = pack.parameters?.sections;
+    const defaults = pack.parameters?.defaults;
+    const firstSection = sections?.[0];
+
+    setDialogUrl(firstSection?.url ?? "");
+    setDialogSectionId(firstSection?.id ?? "");
+    setDialogTitle(pack.name);
+    setDialogMaxItems(defaults?.maxItems ?? 20);
+    setDialogMaxPages(defaults?.maxPages ?? 3);
+    setDialogPreview(null);
+    setDialogStatus(null);
+    setShowPluginDialog(pack);
+  }
+
+  function closePluginDialog(): void {
+    setShowPluginDialog(null);
+    setDialogPreview(null);
+    setDialogStatus(null);
+  }
+
+  function dialogSelectors(): XPathSelectors | null {
+    if (!showPluginDialog) return null;
+    const candidate = showPluginDialog.candidates[0];
+    if (!candidate) return null;
+    return candidate.selectors;
+  }
+
+  async function handleDialogPreview(): Promise<void> {
+    const url = dialogUrl.trim();
+    const selectors = dialogSelectors();
+    if (!url || !selectors) {
+      setDialogStatus("Enter a URL first.");
+      return;
+    }
+    setDialogStatus("Previewing...");
+    setIsDialogBusy(true);
+    try {
+      const preview = await invoke<XPathPreview>("preview_xpath_source", {
+        request: { url, selectors },
+      });
+      setDialogPreview(preview);
+      setDialogStatus(`Preview: ${preview.articles.length} articles found`);
+    } catch (error) {
+      setDialogStatus(String(error));
+      setDialogPreview(null);
+    } finally {
+      setIsDialogBusy(false);
+    }
+  }
+
+  async function handleDialogAddSource(): Promise<void> {
+    const url = dialogUrl.trim();
+    const title = dialogTitle.trim();
+    const selectors = dialogSelectors();
+    if (!url || !title || !selectors) {
+      setDialogStatus("URL and title are required.");
+      return;
+    }
+    setDialogStatus("Adding source...");
+    setIsDialogBusy(true);
+    try {
+      await invoke<Source>("add_xpath_source", {
+        request: { url, title, selectors },
+      });
+      closePluginDialog();
+      setActiveView("reader");
+      await loadData(undefined, "all", undefined);
+      setStatus(`Added source: ${title}`);
+    } catch (error) {
+      setDialogStatus(String(error));
+    } finally {
+      setIsDialogBusy(false);
+    }
   }
 
   async function handleSaveAiSettings(input: {
@@ -1685,77 +1871,274 @@ function App() {
 
       {activeView === "hub" ? (
         <section className="page-view" aria-label="Hub">
-          <header className="page-header">
+          <header className="page-header hub-page-header">
             <div>
               <p className="eyebrow">Hub</p>
-              <h1>Plugin hub</h1>
+              <h1>Plugin Marketplace</h1>
             </div>
-            <a
-              className="secondary-action hub-link"
-              href="https://github.com/FrankieeW/FeaderHub"
-              rel="noreferrer"
-              target="_blank"
+            <button
+              className="secondary-action"
+              onClick={() => void loadXPathPluginPacks()}
+              title="Refresh plugin registry"
             >
-              Open FeaderHub
-            </a>
+              Refresh
+            </button>
           </header>
 
-          <section className="hub-overview" aria-label="Hub summary">
-            <article>
-              <strong>{xpathRulePacks.length}</strong>
-              <span>Bundled packs</span>
-            </article>
-            <article>
-              <strong>{xpathRulePacks.reduce((total, pack) => total + pack.candidates.length, 0)}</strong>
-              <span>XPath candidates</span>
-            </article>
-            <article>
-              <strong>{new Set(xpathRulePacks.flatMap((pack) => pack.capabilities)).size}</strong>
-              <span>Capabilities</span>
-            </article>
-          </section>
+          <div className="hub-search-bar">
+            <input
+              aria-label="Search plugins"
+              className="hub-search-input"
+              onChange={(e) => setHubSearchQuery(e.currentTarget.value)}
+              placeholder="Search plugins by name, description, or capability..."
+              type="search"
+              value={hubSearchQuery}
+            />
+          </div>
 
-          <section className="hub-grid" aria-label="XPath plugin packs">
-            {xpathRulePacks.length === 0 ? (
+          <nav className="hub-categories" aria-label="Plugin categories">
+            {hubCategories.map((cat) => (
+              <button
+                className={`hub-category-chip ${hubCategory === cat ? "active" : ""}`}
+                key={cat}
+                onClick={() => setHubCategory(cat)}
+              >
+                {cat === "all" ? "All" : cat}
+              </button>
+            ))}
+          </nav>
+
+          <div className="hub-stats" aria-label="Plugin statistics">
+            <span>{xpathRulePacks.length} plugins available</span>
+            <span className="hub-stats-sep">·</span>
+            <span>{officialPacks.length} official</span>
+            {communityPacks.length > 0 && (
+              <>
+                <span className="hub-stats-sep">·</span>
+                <span>{communityPacks.length} community</span>
+              </>
+            )}
+          </div>
+
+          {officialPacks.length > 0 && (
+            <section className="hub-section" aria-label="Featured plugins">
+              <h2 className="hub-section-title">Featured</h2>
+              <div className="hub-featured-grid">
+                {officialPacks.slice(0, 3).map((pack) => (
+                  <article className="hub-card hub-card-featured" key={pack.id}>
+                    <div className="hub-card-icon">
+                      {pack.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="hub-card-body">
+                      <div className="hub-card-header">
+                        <span className="hub-card-name">{pack.name}</span>
+                        <span className="hub-card-version">v{pack.version}</span>
+                        <span className={`hub-card-trust hub-trust-${pack.trust.includes("bundled") ? "official" : pack.trust}`}>
+                          {pack.trust.includes("bundled") ? "official" : pack.trust}
+                        </span>
+                      </div>
+                      <p className="hub-card-desc">{pack.description}</p>
+                      <div className="hub-card-meta">
+                        <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
+                        <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
+                      </div>
+                      <div className="hub-card-tags">
+                        {pack.capabilities.map((cap) => (
+                          <span className="hub-tag" key={cap}>{cap}</span>
+                        ))}
+                      </div>
+                      <button
+                        className="hub-add-btn primary-action"
+                        onClick={() => openPluginDialog(pack)}
+                      >
+                        Add Source
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="hub-section" aria-label="All plugins">
+            <h2 className="hub-section-title">
+              {hubCategory === "all" ? "All Plugins" : hubCategory}
+            </h2>
+            {filteredPacks.length === 0 ? (
               <section className="empty-state">
-                <h2>No plugin packs</h2>
-                <p>Feader has not loaded any XPath rule packs yet.</p>
+                <h2>No plugins found</h2>
+                <p>
+                  {hubSearchQuery
+                    ? `No plugins match "${hubSearchQuery}".`
+                    : "No plugins available in this category."}
+                </p>
               </section>
             ) : (
-              xpathRulePacks.map((pack) => (
-                <article className="hub-card" key={pack.id}>
-                  <div className="panel-heading">
-                    <span>{pack.name}</span>
-                    <span>{pack.version}</span>
-                  </div>
-                  <p>{pack.description}</p>
-                  <dl>
-                    <dt>ID</dt>
-                    <dd>{pack.id}</dd>
-                    <dt>API</dt>
-                    <dd>{pack.apiVersion}</dd>
-                    <dt>Trust</dt>
-                    <dd>{pack.trust}</dd>
-                    <dt>Rules</dt>
-                    <dd>{pack.candidates.length}</dd>
-                  </dl>
-                  <div className="capability-list" aria-label={`${pack.name} capabilities`}>
-                    {pack.capabilities.map((capability) => (
-                      <span key={capability}>{capability}</span>
-                    ))}
-                  </div>
-                  <div className="rule-list" aria-label={`${pack.name} rule candidates`}>
-                    {pack.candidates.map((candidate) => (
-                      <span key={candidate.id}>
-                        {candidate.pageType} · P{candidate.priority}
-                      </span>
-                    ))}
-                  </div>
-                </article>
-              ))
+              <div className="hub-grid">
+                {filteredPacks.map((pack) => (
+                  <article className="hub-card" key={pack.id}>
+                    <div className="hub-card-icon hub-card-icon-sm">
+                      {pack.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="hub-card-body">
+                      <div className="hub-card-header">
+                        <span className="hub-card-name">{pack.name}</span>
+                        <span className="hub-card-version">v{pack.version}</span>
+                        <span className={`hub-card-trust hub-trust-${pack.trust.includes("bundled") ? "official" : pack.trust}`}>
+                          {pack.trust.includes("bundled") ? "official" : pack.trust}
+                        </span>
+                      </div>
+                      <p className="hub-card-desc">{pack.description}</p>
+                      <div className="hub-card-meta">
+                        <span>{pack.candidates.length} rule{pack.candidates.length !== 1 ? "s" : ""}</span>
+                        <span>{pack.candidates.map((c) => c.pageType).join(", ")}</span>
+                      </div>
+                      <div className="hub-card-tags">
+                        {pack.capabilities.map((cap) => (
+                          <span className="hub-tag" key={cap}>{cap}</span>
+                        ))}
+                      </div>
+                      <button
+                        className="hub-add-btn"
+                        onClick={() => openPluginDialog(pack)}
+                      >
+                        Add Source
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
             )}
           </section>
         </section>
+      ) : null}
+
+      {showPluginDialog ? (
+        <div className="dialog-overlay" onClick={closePluginDialog}>
+          <section
+            className="dialog-panel plugin-dialog"
+            aria-label="Add source from plugin"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="dialog-header">
+              <h2>Add Source: {showPluginDialog.name}</h2>
+              <button
+                aria-label="Close dialog"
+                className="dialog-close"
+                onClick={closePluginDialog}
+              >
+                &times;
+              </button>
+            </header>
+
+            <div className="dialog-body">
+              <label className="dialog-field">
+                <span>URL</span>
+                <input
+                  aria-label="Page URL"
+                  disabled={isDialogBusy}
+                  onChange={(e) => setDialogUrl(e.currentTarget.value)}
+                  placeholder="https://..."
+                  type="url"
+                  value={dialogUrl}
+                />
+              </label>
+
+              {showPluginDialog.parameters?.sections && showPluginDialog.parameters.sections.length > 0 ? (
+                <label className="dialog-field">
+                  <span>Section</span>
+                  <select
+                    aria-label="Forum section"
+                    disabled={isDialogBusy}
+                    onChange={(e) => {
+                      const sec = showPluginDialog.parameters!.sections!.find(
+                        (s) => s.id === e.currentTarget.value,
+                      );
+                      if (sec) {
+                        setDialogSectionId(sec.id);
+                        setDialogUrl(sec.url);
+                      }
+                    }}
+                    value={dialogSectionId}
+                  >
+                    {showPluginDialog.parameters.sections.map((sec) => (
+                      <option key={sec.id} value={sec.id}>
+                        {sec.path.join(" > ")}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              <label className="dialog-field">
+                <span>Max items: {dialogMaxItems}</span>
+                <input
+                  aria-label="Max items"
+                  disabled={isDialogBusy}
+                  max={100}
+                  min={5}
+                  onChange={(e) => setDialogMaxItems(Number(e.currentTarget.value))}
+                  step={5}
+                  type="range"
+                  value={dialogMaxItems}
+                />
+              </label>
+
+              <label className="dialog-field">
+                <span>Max pages: {dialogMaxPages}</span>
+                <input
+                  aria-label="Max pages"
+                  disabled={isDialogBusy}
+                  max={10}
+                  min={1}
+                  onChange={(e) => setDialogMaxPages(Number(e.currentTarget.value))}
+                  type="range"
+                  value={dialogMaxPages}
+                />
+              </label>
+
+              <label className="dialog-field">
+                <span>Source title</span>
+                <input
+                  aria-label="Source title"
+                  disabled={isDialogBusy}
+                  onChange={(e) => setDialogTitle(e.currentTarget.value)}
+                  placeholder="Source title"
+                  type="text"
+                  value={dialogTitle}
+                />
+              </label>
+
+              {dialogPreview ? (
+                <div className="dialog-preview-summary">
+                  Preview: {dialogPreview.articles.length} articles found
+                  {dialogPreview.nextPageUrl ? " · next page available" : ""}
+                </div>
+              ) : null}
+
+              {dialogStatus ? (
+                <div className="dialog-status">{dialogStatus}</div>
+              ) : null}
+            </div>
+
+            <footer className="dialog-footer">
+              <button
+                className="secondary-action"
+                disabled={isDialogBusy}
+                onClick={handleDialogPreview}
+              >
+                Preview
+              </button>
+              <button
+                className="primary-action"
+                disabled={isDialogBusy}
+                onClick={handleDialogAddSource}
+              >
+                Add Source
+              </button>
+            </footer>
+          </section>
+        </div>
       ) : null}
 
       {activeView === "settings" ? (

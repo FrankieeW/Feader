@@ -4,10 +4,11 @@
 //! not executable, so provider support can move out to FeaderHub before Feader
 //! needs a full sandboxed plugin runtime.
 
-use crate::models::{XPathRuleCandidate, XPathRulePack, XPathSelectors};
+use crate::models::{RemotePluginManifest, RemoteXPathRulePack, RegistryIndex, XPathRuleCandidate, XPathRulePack, XPathSelectors};
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
+const REGISTRY_RAW_BASE: &str = "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main";
 
 pub fn bundled_xpath_rule_packs() -> Vec<XPathRulePack> {
     vec![discuz_rule_pack(), maccms_rule_pack(), generic_rule_pack()]
@@ -46,6 +47,108 @@ fn candidate_matches(document: &str, candidate: &XPathRuleCandidate) -> bool {
         .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
 }
 
+/// Fetch the registry index from the remote FeaderHub repository.
+pub async fn fetch_registry_index() -> Result<RegistryIndex, String> {
+    let url = format!("{REGISTRY_RAW_BASE}/registry/index.json");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "Feader/0.1")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to fetch registry index: {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Registry index returned HTTP {}",
+            response.status()
+        ));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read registry index body: {error}"))?;
+
+    serde_json::from_str::<RegistryIndex>(&body)
+        .map_err(|error| format!("Failed to parse registry index: {error}"))
+}
+
+/// Fetch a single remote plugin manifest and its rule pack, returning a merged XPathRulePack.
+pub async fn fetch_remote_plugin_pack(manifest_path: &str) -> Result<XPathRulePack, String> {
+    let manifest_url = format!("{REGISTRY_RAW_BASE}/{manifest_path}");
+    let client = reqwest::Client::new();
+
+    // Fetch manifest
+    let manifest_response = client
+        .get(&manifest_url)
+        .header("User-Agent", "Feader/0.1")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to fetch manifest {manifest_path}: {error}"))?;
+
+    if !manifest_response.status().is_success() {
+        return Err(format!(
+            "Manifest {manifest_path} returned HTTP {}",
+            manifest_response.status()
+        ));
+    }
+
+    let manifest_body = manifest_response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read manifest body: {error}"))?;
+
+    let manifest: RemotePluginManifest = serde_json::from_str(&manifest_body)
+        .map_err(|error| format!("Failed to parse manifest {manifest_path}: {error}"))?;
+
+    // Fetch the rule pack (entry file, relative to manifest directory)
+    let pack_dir = manifest_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir)
+        .unwrap_or("");
+    let pack_url = format!("{REGISTRY_RAW_BASE}/{pack_dir}/{}", manifest.entry);
+
+    let pack_response = client
+        .get(&pack_url)
+        .header("User-Agent", "Feader/0.1")
+        .send()
+        .await
+        .map_err(|error| format!("Failed to fetch rule pack {}: {error}", manifest.entry))?;
+
+    if !pack_response.status().is_success() {
+        return Err(format!(
+            "Rule pack {} returned HTTP {}",
+            manifest.entry,
+            pack_response.status()
+        ));
+    }
+
+    let pack_body = pack_response
+        .text()
+        .await
+        .map_err(|error| format!("Failed to read rule pack body: {error}"))?;
+
+    let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body)
+        .map_err(|error| format!("Failed to parse rule pack {}: {error}", manifest.entry))?;
+
+    Ok(XPathRulePack {
+        id: pack.id,
+        name: pack.name,
+        version: pack.version,
+        api_version: manifest.feader_api_version,
+        registry: OFFICIAL_REGISTRY.to_string(),
+        trust: "official".to_string(),
+        description: pack.description.unwrap_or_default(),
+        capabilities: vec![
+            "xpath.selectorCandidates".to_string(),
+            "ai.promptRules".to_string(),
+        ],
+        candidates: pack.candidates,
+        parameters: pack.parameters,
+    })
+}
+
 fn rule_pack(
     id: &str,
     name: &str,
@@ -66,6 +169,7 @@ fn rule_pack(
             "ai.promptRules".to_string(),
         ],
         candidates,
+        parameters: None,
     }
 }
 

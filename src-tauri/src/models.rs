@@ -161,7 +161,7 @@ pub struct XPathSourceSuggestion {
 }
 
 /// A static plugin pack that contributes XPath and AI-assist rules.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XPathRulePack {
     pub id: String,
@@ -173,10 +173,90 @@ pub struct XPathRulePack {
     pub description: String,
     pub capabilities: Vec<String>,
     pub candidates: Vec<XPathRuleCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<PluginParameters>,
+}
+
+/// Optional parameter block for source creation dialogs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginParameters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<PluginSection>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<PluginDefaults>,
+}
+
+/// A navigable section tree node for forum/site plugins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSection {
+    pub id: String,
+    pub path: Vec<String>,
+    pub url: String,
+}
+
+/// Default values for the source parameter dialog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDefaults {
+    pub max_items: Option<usize>,
+    pub max_pages: Option<usize>,
+}
+
+/// Registry index file from FeaderHub.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryIndex {
+    pub schema_version: String,
+    pub updated_at: String,
+    pub plugins: Vec<RegistryPluginEntry>,
+}
+
+/// One plugin listed in the registry index.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryPluginEntry {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub kind: String,
+    pub manifest: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+/// Remote plugin manifest (minimal subset needed to locate the rule pack).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePluginManifest {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub kind: String,
+    pub feader_api_version: String,
+    pub description: Option<String>,
+    pub entry: String,
+}
+
+/// Remote xpath-rule-pack payload.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteXPathRulePack {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: Option<String>,
+    pub candidates: Vec<XPathRuleCandidate>,
+    #[serde(default)]
+    pub parameters: Option<PluginParameters>,
 }
 
 /// One page-family rule contributed by a static XPath plugin pack.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XPathRuleCandidate {
     pub id: String,
