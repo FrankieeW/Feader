@@ -1,0 +1,268 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src-tauri/Cargo.toml
+      - src-tauri/tauri.conf.json
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Check version bump
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check release version
+        id: version
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const cp = require("child_process");
+
+          function output(name, value) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+
+          function parseJson(path) {
+            return JSON.parse(fs.readFileSync(path, "utf8"));
+          }
+
+          function parseCargoVersionContent(cargo, path) {
+            const match = cargo.match(/^\s*version\s*=\s*"([^"]+)"/m);
+            if (!match) {
+              throw new Error(`Could not find package version in ${path}`);
+            }
+            return match[1];
+          }
+
+          function parseCargoVersion(path) {
+            return parseCargoVersionContent(fs.readFileSync(path, "utf8"), path);
+          }
+
+          function parseSemver(value) {
+            const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
+            if (!match) {
+              throw new Error(`Version '${value}' is not a supported semver value`);
+            }
+            return match.slice(1, 4).map(Number);
+          }
+
+          function compareSemver(a, b) {
+            const left = parseSemver(a);
+            const right = parseSemver(b);
+            for (let index = 0; index < 3; index += 1) {
+              if (left[index] !== right[index]) {
+                return left[index] - right[index];
+              }
+            }
+            return 0;
+          }
+
+          function readGitFile(ref, path) {
+            try {
+              return cp.execFileSync("git", ["show", `${ref}:${path}`], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+              });
+            } catch {
+              return null;
+            }
+          }
+
+          const packageVersion = parseJson("package.json").version;
+          const lockVersion = parseJson("package-lock.json").packages[""].version;
+          const tauriVersion = parseJson("src-tauri/tauri.conf.json").version;
+          const cargoVersion = parseCargoVersion("src-tauri/Cargo.toml");
+          const versions = [packageVersion, lockVersion, tauriVersion, cargoVersion];
+          const uniqueVersions = new Set(versions);
+
+          if (uniqueVersions.size !== 1) {
+            throw new Error(
+              `Version files disagree: package=${packageVersion}, lock=${lockVersion}, tauri=${tauriVersion}, cargo=${cargoVersion}`,
+            );
+          }
+
+          const previousFiles = {
+            packageJson: readGitFile(process.env.BEFORE_SHA, "package.json"),
+            packageLock: readGitFile(process.env.BEFORE_SHA, "package-lock.json"),
+            tauriConfig: readGitFile(process.env.BEFORE_SHA, "src-tauri/tauri.conf.json"),
+            cargoToml: readGitFile(process.env.BEFORE_SHA, "src-tauri/Cargo.toml"),
+          };
+
+          for (const [name, content] of Object.entries(previousFiles)) {
+            if (!content) {
+              throw new Error(`Could not read previous ${name} at ${process.env.BEFORE_SHA}`);
+            }
+          }
+
+          const previousVersions = [
+            JSON.parse(previousFiles.packageJson).version,
+            JSON.parse(previousFiles.packageLock).packages[""].version,
+            JSON.parse(previousFiles.tauriConfig).version,
+            parseCargoVersionContent(previousFiles.cargoToml, "src-tauri/Cargo.toml"),
+          ];
+          const shouldRelease = previousVersions.some(
+            (previousVersion) => compareSemver(packageVersion, previousVersion) > 0,
+          );
+
+          if (!shouldRelease) {
+            console.log(
+              `Skipping release because version did not increase from previous versions: ${previousVersions.join(", ")} -> ${packageVersion}`,
+            );
+          }
+
+          output("version", packageVersion);
+          output("should_release", shouldRelease ? "true" : "false");
+          NODE
+
+      - name: Summarize release decision
+        run: |
+          echo "Version: ${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Should release: ${{ steps.version.outputs.should_release }}" >> "$GITHUB_STEP_SUMMARY"
+
+  create-release:
+    name: Create draft release
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+    steps:
+      - name: Create GitHub release
+        id: create-release
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        with:
+          result-encoding: string
+          script: |
+            const tag = `v${process.env.VERSION}`;
+            try {
+              const { data: existingRelease } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+
+              if (!existingRelease.draft) {
+                core.setFailed(`Release ${tag} already exists and is not a draft.`);
+                return "";
+              }
+
+              return String(existingRelease.id);
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              target_commitish: context.sha,
+              name: `Feader ${tag}`,
+              body: [
+                `Feader ${process.env.VERSION} desktop builds.`,
+                "",
+                "Download the installer for your platform from the assets below.",
+              ].join("\n"),
+              draft: true,
+              prerelease: false,
+            });
+
+            return String(release.id);
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs:
+      - prepare
+      - create-release
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-22.04
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and upload release bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: v__VERSION__
+          releaseDraft: true
+
+  publish-release:
+    name: Publish release
+    needs:
+      - prepare
+      - create-release
+      - build
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              draft: false,
+              prerelease: false,
+            });
