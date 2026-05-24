@@ -18,8 +18,8 @@ const BODY_SNIPPET_CAP: usize = 120;
 fn normalize_html(raw: &str) -> String {
     use html5ever::tendril::TendrilSink;
 
-    let dom = html5ever::parse_document(markup5ever_rcdom::RcDom::default(), Default::default())
-        .one(raw);
+    let dom =
+        html5ever::parse_document(markup5ever_rcdom::RcDom::default(), Default::default()).one(raw);
     let handle: markup5ever_rcdom::SerializableHandle = dom.document.clone().into();
 
     let mut buffer = Vec::new();
@@ -34,9 +34,25 @@ fn normalize_html(raw: &str) -> String {
     }
 
     let xml = String::from_utf8(buffer).unwrap_or_else(|_| raw.to_string());
-    xml.replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
-        .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
-        .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", "")
+    strip_leading_doctype(
+        &xml.replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
+            .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
+            .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", ""),
+    )
+}
+
+fn strip_leading_doctype(value: &str) -> String {
+    let trimmed = value.trim_start();
+    if !trimmed
+        .get(..9)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<!doctype"))
+    {
+        return value.to_string();
+    }
+    let Some(end) = trimmed.find('>') else {
+        return value.to_string();
+    };
+    trimmed[end + 1..].trim_start().to_string()
 }
 
 /// Fetch a static page and extract articles with XPath selectors.
@@ -100,11 +116,7 @@ pub async fn fetch_normalized(url: &str) -> Result<String, String> {
 
 /// True when `expression` compiles as a valid XPath.
 pub fn is_valid_xpath(expression: &str) -> bool {
-    Factory::new()
-        .build(expression)
-        .ok()
-        .flatten()
-        .is_some()
+    Factory::new().build(expression).ok().flatten().is_some()
 }
 
 async fn fetch_page(url: &str) -> Result<String, String> {
@@ -382,6 +394,87 @@ pub fn preview_xpath_document(
     })
 }
 
+/// Try to turn a model's selector draft into a selector set that actually previews.
+///
+/// AI models often infer a useful `items` selector but return title/URL selectors that
+/// are absolute to the document instead of relative to each item. The adapter extracts
+/// fields from each item node, so validate against the same normalized document and
+/// repair required fields with conservative relative candidates.
+pub fn improve_xpath_selectors_for_preview(
+    base_url: &str,
+    document: &str,
+    selectors: &XPathSelectors,
+) -> XPathSelectors {
+    if preview_xpath_document(base_url, document, selectors)
+        .map(|preview| !preview.articles.is_empty())
+        .unwrap_or(false)
+    {
+        return selectors.clone();
+    }
+
+    let mut improved = selectors.clone();
+    if let Some(title) = first_working_required_selector(
+        base_url,
+        document,
+        &improved,
+        "title",
+        &[
+            improved.title.as_str(),
+            ".//a[normalize-space()][1]",
+            ".//*[contains(@class,'title')][1]",
+            ".//*[contains(@class,'name')][1]",
+            ".//a[@title][1]/@title",
+            ".//img[@alt][1]/@alt",
+        ],
+    ) {
+        improved.title = title;
+    }
+    if let Some(url) = first_working_required_selector(
+        base_url,
+        document,
+        &improved,
+        "url",
+        &[
+            improved.url.as_str(),
+            ".//a[@href][1]/@href",
+            ".//a[normalize-space()][1]/@href",
+            ".//*[contains(@class,'title')]//a[@href][1]/@href",
+            ".//*[contains(@class,'name')]//a[@href][1]/@href",
+        ],
+    ) {
+        improved.url = url;
+    }
+
+    improved
+}
+
+fn first_working_required_selector(
+    base_url: &str,
+    document: &str,
+    selectors: &XPathSelectors,
+    field: &str,
+    candidates: &[&str],
+) -> Option<String> {
+    candidates
+        .iter()
+        .map(|candidate| candidate.trim())
+        .filter(|candidate| !candidate.is_empty())
+        .find_map(|candidate| {
+            let mut draft = selectors.clone();
+            match field {
+                "title" => draft.title = candidate.to_string(),
+                "url" => draft.url = candidate.to_string(),
+                _ => return None,
+            }
+            let preview = preview_xpath_document(base_url, document, &draft).ok()?;
+            preview
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.field == field && diagnostic.status == "ok")
+                .then(|| candidate.to_string())
+        })
+}
+
 fn next_page_url(
     base_url: &str,
     document: &str,
@@ -391,11 +484,9 @@ fn next_page_url(
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
     let document = package.as_document();
-    let raw = preview_optional_string(
-        Node::Root(document.root()),
-        selectors.next_page.as_deref(),
-    );
-    raw.map(|value| absolutize_url(base_url, &value)).transpose()
+    let raw = preview_optional_string(Node::Root(document.root()), selectors.next_page.as_deref());
+    raw.map(|value| absolutize_url(base_url, &value))
+        .transpose()
 }
 
 fn validate_selectors(selectors: &XPathSelectors) -> Result<(), String> {
@@ -692,7 +783,10 @@ fn escape_html(value: &str, in_attribute: bool) -> String {
     escaped
 }
 
-fn evaluate_content_html(item: Node<'_>, expression: Option<&str>) -> Result<Option<String>, String> {
+fn evaluate_content_html(
+    item: Node<'_>,
+    expression: Option<&str>,
+) -> Result<Option<String>, String> {
     let Some(expression) = expression.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
@@ -757,6 +851,20 @@ mod tests {
     }
 
     #[test]
+    fn strips_doctype_before_xml_xpath_parse() {
+        let html = r#"<!doctype html><html><body><article><h2><a href="/one">First</a></h2></article></body></html>"#;
+        let normalized = normalize_html_document(html).expect("normalizes");
+        assert!(!normalized
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("<!doctype"));
+
+        let feed = parse_xpath_source("https://example.com/blog/", &normalized, &selectors())
+            .expect("xpath extracts after stripping doctype");
+        assert_eq!(feed.articles.len(), 1);
+    }
+
+    #[test]
     fn content_selector_captures_inner_html() {
         let mut selectors = selectors();
         selectors.content = Some(".//section".to_string());
@@ -776,7 +884,10 @@ mod tests {
         .expect("xpath extracts");
 
         let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
-        assert!(html.contains("<strong>"), "expected inner tags, got: {html}");
+        assert!(
+            html.contains("<strong>"),
+            "expected inner tags, got: {html}"
+        );
         assert!(html.contains("Bold"));
     }
 
@@ -801,7 +912,10 @@ mod tests {
 
         let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
         assert!(html.contains("<img src=\"/a.png\">"), "got: {html}");
-        assert!(!html.contains("</img>"), "void element must not close, got: {html}");
+        assert!(
+            !html.contains("</img>"),
+            "void element must not close, got: {html}"
+        );
     }
 
     #[test]
@@ -936,6 +1050,47 @@ mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.field == "title" && diagnostic.status == "invalid"));
+    }
+
+    #[test]
+    fn improves_ai_draft_required_selectors_against_preview() {
+        let document = normalize_html_document(
+            r#"
+            <html><body>
+              <ul>
+                <li class="card"><a href="/one"><img alt="First title" src="/one.jpg"></a></li>
+                <li class="card"><a href="/two"><img alt="Second title" src="/two.jpg"></a></li>
+              </ul>
+            </body></html>
+            "#,
+        )
+        .expect("normalizes");
+        let draft = XPathSelectors {
+            items: "//li[contains(@class,'card')]".to_string(),
+            title: ".//h3".to_string(),
+            url: ".//h3/a/@href".to_string(),
+            summary: None,
+            published_at: None,
+            author: None,
+            content: None,
+            image: Some(".//img/@src".to_string()),
+            next_page: None,
+        };
+
+        let broken = preview_xpath_document("https://example.com/list", &document, &draft)
+            .expect("previews broken draft");
+        assert!(broken.articles.is_empty());
+
+        let improved =
+            improve_xpath_selectors_for_preview("https://example.com/list", &document, &draft);
+        let preview = preview_xpath_document("https://example.com/list", &document, &improved)
+            .expect("previews improved selectors");
+
+        assert_eq!(improved.title, ".//img[@alt][1]/@alt");
+        assert_eq!(improved.url, ".//a[@href][1]/@href");
+        assert_eq!(preview.articles.len(), 2);
+        assert_eq!(preview.articles[0].title, "First title");
+        assert_eq!(preview.articles[0].url, "https://example.com/one");
     }
 
     #[test]

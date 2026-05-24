@@ -1,7 +1,7 @@
 //! Feader Tauri command surface and application bootstrap.
 
-pub mod cli;
 mod ai;
+pub mod cli;
 mod db;
 mod feed_adapter;
 mod models;
@@ -118,7 +118,10 @@ async fn suggest_xpath_source(
     }
     let raw_key = database.raw_ai_api_key()?;
     let html = xpath_adapter::fetch_normalized(url).await?;
-    ai::suggest_xpath_selectors(&settings, &raw_key, &html).await
+    let mut suggestion = ai::suggest_xpath_selectors(&settings, &raw_key, &html).await?;
+    suggestion.selectors =
+        xpath_adapter::improve_xpath_selectors_for_preview(url, &html, &suggestion.selectors);
+    Ok(suggestion)
 }
 
 /// Add a feed source after validating that it can be parsed.

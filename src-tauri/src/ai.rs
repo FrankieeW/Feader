@@ -158,7 +158,10 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         .await
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("AI request failed with status {}", response.status()));
+        return Err(format!(
+            "AI request failed with status {}",
+            response.status()
+        ));
     }
     let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
     let text = extract_model_text(&value).ok_or_else(|| {
@@ -212,7 +215,10 @@ async fn send_openai_request(
         .await
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("AI request failed with status {}", response.status()));
+        return Err(format!(
+            "AI request failed with status {}",
+            response.status()
+        ));
     }
     let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
     extract_model_text(&value).ok_or_else(|| {
@@ -247,11 +253,7 @@ fn is_complete_endpoint(value: &str) -> bool {
 }
 
 fn response_snippet(text: &str) -> String {
-    let snippet: String = text
-        .trim()
-        .chars()
-        .take(AI_RESPONSE_SNIPPET_CAP)
-        .collect();
+    let snippet: String = text.trim().chars().take(AI_RESPONSE_SNIPPET_CAP).collect();
     if snippet.is_empty() {
         "<empty>".to_string()
     } else {
@@ -369,8 +371,14 @@ mod tests {
     #[test]
     fn resolves_env_reference_key() {
         std::env::set_var("FEADER_TEST_KEY", "resolved-secret");
-        assert_eq!(resolve_api_key("$FEADER_TEST_KEY").unwrap(), "resolved-secret");
-        assert_eq!(resolve_api_key("${FEADER_TEST_KEY}").unwrap(), "resolved-secret");
+        assert_eq!(
+            resolve_api_key("$FEADER_TEST_KEY").unwrap(),
+            "resolved-secret"
+        );
+        assert_eq!(
+            resolve_api_key("${FEADER_TEST_KEY}").unwrap(),
+            "resolved-secret"
+        );
         assert_eq!(resolve_api_key("literal-key").unwrap(), "literal-key");
         assert!(resolve_api_key("$FEADER_MISSING_VAR_XYZ").is_err());
         std::env::remove_var("FEADER_TEST_KEY");
