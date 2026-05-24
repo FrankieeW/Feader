@@ -2267,7 +2267,6 @@ function App() {
                   aria-label="Plugin cookie header"
                   disabled={isDialogBusy}
                   onChange={(e) => setDialogCookie(e.currentTarget.value)}
-                  placeholder='name=value; ... or $FEADER_NAIXI_COOKIE'
                   type="password"
                   value={dialogCookie}
                   placeholder={pluginCredential?.cookieSet ? "Cookie saved — type to replace" : "name=value; ... or $FEADER_NAIXI_COOKIE"}
