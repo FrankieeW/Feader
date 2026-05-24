@@ -2529,6 +2529,53 @@ input:focus-visible,
   font-weight: 600;
 }
 
+/* ── Plugin cookie management ─── */
+
+.cookie-field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.cookie-field-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.hub-cookie-save,
+.hub-cookie-check {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.hub-cookie-save:hover,
+.hub-cookie-check:hover {
+  background: var(--color-action);
+  color: #fff;
+  border-color: var(--color-action);
+}
+
+.cookie-status.ok {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-success, #4caf50);
+}
+
+.cookie-status.bad {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-danger, #f44336);
+}
+
 .dialog-status {
   font-size: 12px;
   color: var(--color-muted);

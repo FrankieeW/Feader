@@ -905,6 +905,8 @@ function App() {
   const [dialogCandidateId, setDialogCandidateId] = useState("");
   const [dialogMaxItems, setDialogMaxItems] = useState<number | undefined>();
   const [dialogCookie, setDialogCookie] = useState("");
+  const [pluginCredential, setPluginCredential] = useState<PluginCredential | null>(null);
+  const [credentialCheck, setCredentialCheck] = useState<CredentialCheck | null>(null);
   const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
   const [dialogStatus, setDialogStatus] = useState<string | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
@@ -1093,7 +1095,11 @@ function App() {
     setDialogCookie(firstCandidate?.selectors.cookie ?? "");
     setDialogPreview(null);
     setDialogStatus(null);
+    setCredentialCheck(null);
     setShowPluginDialog(pack);
+    invoke<PluginCredential>("get_plugin_credential", { pluginId: pack.id })
+      .then(setPluginCredential)
+      .catch(() => setPluginCredential(null));
   }
 
   function closePluginDialog(): void {
@@ -2255,15 +2261,69 @@ function App() {
               </label>
 
               <label className="dialog-field">
-                <span>Cookie</span>
+                <span>Plugin Cookie</span>
                 <input
-                  aria-label="Cookie header"
+                  aria-label="Plugin cookie header"
                   disabled={isDialogBusy}
                   onChange={(e) => setDialogCookie(e.currentTarget.value)}
-                  placeholder='name=value; ... or {"name":"value"} or $FEADER_NAIXI_COOKIE'
+                  placeholder='name=value; ... or $FEADER_NAIXI_COOKIE'
                   type="password"
-                  value={dialogCookie}
+                  value={pluginCredential?.cookieSet ? "saved" : dialogCookie}
                 />
+                <small className="cookie-field-hint">
+                  {pluginCredential?.cookieSet
+                    ? "Cookie saved (masked). Type to replace."
+                    : "Empty = use plugin cookie"}
+                </small>
+                <div className="cookie-field-actions">
+                  <button
+                    type="button"
+                    className="hub-cookie-save"
+                    disabled={isDialogBusy || !showPluginDialog}
+                    onClick={async () => {
+                      if (!showPluginDialog) return;
+                      try {
+                        const updated = await invoke<PluginCredential>("set_plugin_credential", {
+                          pluginId: showPluginDialog.id,
+                          cookie: dialogCookie,
+                        });
+                        setPluginCredential(updated);
+                        setStatus("Cookie saved");
+                      } catch (error) {
+                        setStatus(String(error));
+                      }
+                    }}
+                  >
+                    Save cookie
+                  </button>
+                  {showPluginDialog?.auth ? (
+                    <button
+                      type="button"
+                      className="hub-cookie-check"
+                      disabled={isDialogBusy}
+                      onClick={async () => {
+                        if (!showPluginDialog) return;
+                        try {
+                          const result = await invoke<CredentialCheck>("check_plugin_credential", {
+                            pluginId: showPluginDialog.id,
+                            checkUrl: showPluginDialog.auth!.checkUrl,
+                            loggedInXpath: showPluginDialog.auth!.loggedInXPath,
+                          });
+                          setCredentialCheck(result);
+                        } catch (error) {
+                          setCredentialCheck({ ok: false, message: String(error), checkedAt: new Date().toISOString() });
+                        }
+                      }}
+                    >
+                      Check cookie
+                    </button>
+                  ) : null}
+                </div>
+                {credentialCheck ? (
+                  <small className={credentialCheck.ok ? "cookie-status ok" : "cookie-status bad"}>
+                    {credentialCheck.message}
+                  </small>
+                ) : null}
               </label>
 
               {dialogPreview ? (
