@@ -459,6 +459,7 @@ async fn refresh_source_record(database: &AppDatabase, source: &Source) -> Resul
         }
         "json-api" => {
             let selectors = parse_xpath_selectors(source)?;
+            // TODO: fall back to plugin_credentials table when per-source cookie is empty
             let cookie = selectors.cookie.clone().filter(|c| !c.trim().is_empty());
             json_adapter::fetch_json_feed(&source.url, &selectors, cookie.as_deref()).await
         }
