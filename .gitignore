@@ -52,6 +52,9 @@ pnpm-debug.log*
 # Package artifacts
 *.tgz
 
+# Scratch / source assets
+temp/
+
 # Visual brainstorm companion
 .superpowers/
 
