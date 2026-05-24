@@ -657,9 +657,9 @@ input:disabled {
 }
 
 .feed-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
 }
 
 .feed-row .feed-item {
@@ -668,28 +668,44 @@ input:disabled {
 }
 
 .feed-delete {
-  flex-shrink: 0;
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: 1px solid var(--color-danger-border);
+  border: none;
   border-radius: 6px;
-  background: var(--color-danger-bg);
-  color: var(--color-danger);
+  background: transparent;
+  color: var(--color-faint);
   font-size: 17px;
   line-height: 1;
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.feed-row:hover .feed-delete,
+.feed-delete:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .feed-delete:hover {
-  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
 }
 
 .feed-delete:disabled {
   cursor: default;
-  opacity: 0.4;
+  opacity: 0;
+}
+
+.feed-row:hover .feed-item small {
+  visibility: hidden;
 }
 
 .status-dot.muted {

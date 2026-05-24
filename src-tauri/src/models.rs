@@ -317,7 +317,9 @@ pub struct PluginAuthor {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginAuth {
+    #[serde(default)]
     pub check_url: String,
+    #[serde(default)]
     pub logged_in_xpath: String,
 }
 

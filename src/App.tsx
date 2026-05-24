@@ -155,9 +155,24 @@ type PluginDefaults = {
   maxPages?: number;
 };
 
+type ParamOption = {
+  value: string;
+  label: string;
+};
+
+type PluginParam = {
+  key: string;
+  label: string;
+  type: string;
+  placeholder?: string;
+  options?: ParamOption[];
+  required: boolean;
+};
+
 type PluginParameters = {
   urlTemplate?: string;
   sections?: PluginSection[];
+  params?: PluginParam[];
   defaults?: PluginDefaults;
 };
 
@@ -198,6 +213,7 @@ type XPathRulePack = {
   name: string;
   version: string;
   apiVersion: string;
+  kind: string;
   registry: string;
   trust: string;
   description: string;
@@ -492,6 +508,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
     name: "Naixi Forum XPath Rules",
     version: "0.1.0",
     apiVersion: "xpath-rule-pack/v1",
+    kind: "static-xpath-rule-pack",
     registry: "https://github.com/FrankieeW/FeaderHub",
     trust: "official",
     description: "Static XPath rules for naixi.net forum thread lists with section-based browsing.",
@@ -912,6 +929,7 @@ function App() {
   const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
   const [dialogStatus, setDialogStatus] = useState<string | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
+  const [dialogParamValues, setDialogParamValues] = useState<Record<string, string>>({});
   const [hubRegistryStatus, setHubRegistryStatus] = useState<string | null>(null);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
@@ -1084,12 +1102,38 @@ function App() {
     }
   }
 
+  function pluginUrlFromParams(pack: XPathRulePack, params: Record<string, string>): string {
+    let url = pack.parameters?.urlTemplate ?? "";
+    for (const [key, value] of Object.entries(params)) {
+      url = url.replace(`{${key}}`, encodeURIComponent(value));
+    }
+    return url;
+  }
+
   function openPluginDialog(pack: XPathRulePack): void {
     const sections = pack.parameters?.sections;
     const firstSection = sections?.[0];
     const firstCandidate = pack.candidates[0];
+    const pluginParams = pack.parameters?.params;
 
-    setDialogUrl(firstSection?.url ?? "");
+    // Initialize param values from plugin param defaults
+    const initialParams: Record<string, string> = {};
+    if (pluginParams) {
+      for (const param of pluginParams) {
+        if (param.type === "select" && param.options?.[0]) {
+          initialParams[param.key] = param.options[0].value;
+        } else {
+          initialParams[param.key] = "";
+        }
+      }
+      setDialogParamValues(initialParams);
+      // Auto-construct URL from params
+      setDialogUrl(pluginUrlFromParams(pack, initialParams));
+    } else {
+      setDialogParamValues({});
+      setDialogUrl(firstSection?.url ?? "");
+    }
+
     setDialogSectionId(firstSection?.id ?? "");
     setDialogTitle(pluginSourceTitle(pack, firstSection));
     setDialogCandidateId(firstCandidate?.id ?? "");
@@ -1158,7 +1202,8 @@ function App() {
     setDialogStatus("Adding source...");
     setIsDialogBusy(true);
     try {
-      await invoke<Source>("add_xpath_source", {
+      const command = showPluginDialog?.kind === "json-api-feed" ? "add_json_api_source" : "add_xpath_source";
+      await invoke<Source>(command, {
         request: { url, title, selectors },
       });
       closePluginDialog();
@@ -2172,6 +2217,50 @@ function App() {
             </header>
 
             <div className="dialog-body">
+              {showPluginDialog.parameters?.params && showPluginDialog.parameters.params.length > 0 ? (
+                <>
+                  {showPluginDialog.parameters.params.map((param) => {
+                    const value = dialogParamValues[param.key] ?? "";
+                    return (
+                      <label className="dialog-field" key={param.key}>
+                        <span>{param.label}</span>
+                        {param.type === "select" && param.options ? (
+                          <select
+                            aria-label={param.label}
+                            disabled={isDialogBusy}
+                            onChange={(e) => {
+                              const next = { ...dialogParamValues, [param.key]: e.currentTarget.value };
+                              setDialogParamValues(next);
+                              setDialogUrl(pluginUrlFromParams(showPluginDialog, next));
+                            }}
+                            value={value}
+                          >
+                            {param.options.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            aria-label={param.label}
+                            disabled={isDialogBusy}
+                            onChange={(e) => {
+                              const next = { ...dialogParamValues, [param.key]: e.currentTarget.value };
+                              setDialogParamValues(next);
+                              setDialogUrl(pluginUrlFromParams(showPluginDialog, next));
+                            }}
+                            placeholder={param.placeholder}
+                            type="text"
+                            value={value}
+                          />
+                        )}
+                      </label>
+                    );
+                  })}
+                </>
+              ) : null}
+
               <label className="dialog-field">
                 <span>URL</span>
                 <input
