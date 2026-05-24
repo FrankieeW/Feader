@@ -9,8 +9,9 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use crate::models::{
-    RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteXPathRulePack,
-    XPathRuleCandidate, XPathRulePack, XPathSelectors, PLUGIN_KIND_JSON_API_FEED, PLUGIN_KIND_XPATH,
+    PluginMarket, RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteXPathRulePack,
+    XPathRuleCandidate, XPathRulePack, XPathSelectors, PLUGIN_KIND_JSON_API_FEED,
+    PLUGIN_KIND_XPATH,
 };
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
@@ -25,6 +26,17 @@ const PLUGIN_FILE_BYTE_CAP: usize = 256 * 1024;
 
 pub fn bundled_xpath_rule_packs() -> Vec<XPathRulePack> {
     vec![discuz_rule_pack(), maccms_rule_pack(), generic_rule_pack()]
+}
+
+pub fn official_plugin_market() -> PluginMarket {
+    PluginMarket {
+        id: "official-feaderhub".to_string(),
+        name: "FeaderHub Official".to_string(),
+        repository: OFFICIAL_REGISTRY.to_string(),
+        raw_base_url: REGISTRY_RAW_BASE.to_string(),
+        branch: "main".to_string(),
+        builtin: true,
+    }
 }
 
 #[cfg(test)]
@@ -73,9 +85,14 @@ fn candidate_matches(document: &str, candidate: &XPathRuleCandidate) -> bool {
         .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
 }
 
-/// Fetch the registry index from the remote FeaderHub repository.
-pub async fn fetch_registry_index() -> Result<RegistryIndex, String> {
-    let url = format!("{REGISTRY_RAW_BASE}/registry/index.json");
+pub async fn fetch_registry_index_from_market(
+    market: &PluginMarket,
+) -> Result<RegistryIndex, String> {
+    fetch_registry_index_from_base(&market.raw_base_url).await
+}
+
+async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIndex, String> {
+    let url = format!("{}/registry/index.json", raw_base_url.trim_end_matches('/'));
     let body = fetch_text_limited(&url, REGISTRY_INDEX_BYTE_CAP, "registry index").await?;
 
     let index = serde_json::from_str::<RegistryIndex>(&body)
@@ -89,9 +106,19 @@ pub async fn fetch_registry_index() -> Result<RegistryIndex, String> {
     Ok(index)
 }
 
-/// Fetch a single remote plugin manifest and its rule pack, returning a merged XPathRulePack.
-pub async fn fetch_remote_plugin_pack(
+pub async fn fetch_remote_plugin_pack_from_market(
+    market: &PluginMarket,
     entry: &RegistryPluginEntry,
+) -> Result<XPathRulePack, String> {
+    fetch_remote_plugin_pack_from_base(entry, &market.raw_base_url, &market.repository, "community")
+        .await
+}
+
+async fn fetch_remote_plugin_pack_from_base(
+    entry: &RegistryPluginEntry,
+    raw_base_url: &str,
+    registry: &str,
+    trust: &str,
 ) -> Result<XPathRulePack, String> {
     let is_xpath = entry.kind == STATIC_XPATH_KIND;
     let is_json = entry.kind == JSON_API_FEED_KIND;
@@ -109,7 +136,8 @@ pub async fn fetch_remote_plugin_pack(
         .ok_or_else(|| format!("Plugin {} has no valid sha256", entry.id))?;
 
     let manifest_path = validate_registry_path(&entry.manifest, "manifest")?;
-    let manifest_url = format!("{REGISTRY_RAW_BASE}/{manifest_path}");
+    let raw_base_url = raw_base_url.trim_end_matches('/');
+    let manifest_url = format!("{raw_base_url}/{manifest_path}");
 
     let manifest_body =
         fetch_text_limited(&manifest_url, PLUGIN_FILE_BYTE_CAP, "plugin manifest").await?;
@@ -123,7 +151,7 @@ pub async fn fetch_remote_plugin_pack(
         .map(|(dir, _)| dir)
         .unwrap_or("");
     let entry_file = validate_registry_path(&manifest.entry, "rule pack entry")?;
-    let pack_url = format!("{REGISTRY_RAW_BASE}/{pack_dir}/{entry_file}");
+    let pack_url = format!("{raw_base_url}/{pack_dir}/{entry_file}");
 
     let pack_body = fetch_text_limited(&pack_url, PLUGIN_FILE_BYTE_CAP, "rule pack").await?;
     verify_sha256(&pack_body, expected_sha, &entry.id)?;
@@ -138,8 +166,8 @@ pub async fn fetch_remote_plugin_pack(
         version: pack.version,
         api_version: manifest.feader_api_version,
         kind: manifest.kind.clone(),
-        registry: OFFICIAL_REGISTRY.to_string(),
-        trust: "official".to_string(),
+        registry: registry.to_string(),
+        trust: trust.to_string(),
         description: pack
             .description
             .or(manifest.description)
@@ -151,6 +179,95 @@ pub async fn fetch_remote_plugin_pack(
         parameters: pack.parameters,
         auth: pack.auth,
     })
+}
+
+pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack, String> {
+    let normalized_url = normalize_plugin_file_url(url)?;
+    let url = normalized_url.as_str();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Plugin URL must start with http:// or https://".to_string());
+    }
+    let body = fetch_text_limited(url, PLUGIN_FILE_BYTE_CAP, "plugin URL").await?;
+    if let Ok(pack) = serde_json::from_str::<RemoteXPathRulePack>(&body) {
+        validate_standalone_rule_pack(&pack)?;
+        return Ok(XPathRulePack {
+            id: pack.id,
+            name: pack.name,
+            version: pack.version,
+            api_version: STATIC_XPATH_API_VERSION.to_string(),
+            kind: STATIC_XPATH_KIND.to_string(),
+            registry: url.to_string(),
+            trust: "direct-url".to_string(),
+            description: pack.description.unwrap_or_default(),
+            logo: None,
+            capabilities: plugin_capabilities(&pack.candidates),
+            candidates: pack.candidates,
+            authors: Vec::new(),
+            parameters: pack.parameters,
+            auth: pack.auth,
+        });
+    }
+
+    let manifest: RemotePluginManifest = serde_json::from_str(&body)
+        .map_err(|error| format!("Plugin URL was not a manifest or rule pack JSON: {error}"))?;
+    let manifest_url = url::Url::parse(url).map_err(|error| error.to_string())?;
+    let entry_url = manifest_url
+        .join(&manifest.entry)
+        .map_err(|error| format!("Invalid manifest entry URL: {error}"))?;
+    let pack_body = fetch_text_limited(
+        entry_url.as_str(),
+        PLUGIN_FILE_BYTE_CAP,
+        "direct plugin rule pack",
+    )
+    .await?;
+    let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body).map_err(|error| {
+        format!(
+            "Failed to parse direct rule pack {}: {error}",
+            manifest.entry
+        )
+    })?;
+    validate_direct_manifest_and_pack(&manifest, &pack)?;
+    Ok(XPathRulePack {
+        id: pack.id,
+        name: pack.name,
+        version: pack.version,
+        api_version: manifest.feader_api_version,
+        kind: manifest.kind,
+        registry: url.to_string(),
+        trust: "direct-url".to_string(),
+        description: pack
+            .description
+            .or(manifest.description)
+            .unwrap_or_default(),
+        logo: manifest.logo,
+        capabilities: plugin_capabilities(&pack.candidates),
+        candidates: pack.candidates,
+        authors: manifest.authors,
+        parameters: pack.parameters,
+        auth: pack.auth,
+    })
+}
+
+fn normalize_plugin_file_url(url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://github.com/") {
+        return Ok(trimmed.to_string());
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|error| error.to_string())?;
+    let segments = parsed
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() >= 5 && segments[2] == "blob" {
+        let owner = segments[0];
+        let repo = segments[1];
+        let branch = segments[3];
+        let path = segments[4..].join("/");
+        return Ok(format!(
+            "https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String, String> {
@@ -259,6 +376,38 @@ fn validate_rule_pack(
         ));
     }
     Ok(())
+}
+
+fn validate_standalone_rule_pack(pack: &RemoteXPathRulePack) -> Result<(), String> {
+    if pack.schema_version != STATIC_XPATH_API_VERSION {
+        return Err(format!(
+            "Rule pack schema '{}' is not supported",
+            pack.schema_version
+        ));
+    }
+    if pack.id.trim().is_empty() || pack.name.trim().is_empty() || pack.version.trim().is_empty() {
+        return Err("Rule pack id, name, and version are required".to_string());
+    }
+    if pack.candidates.is_empty() {
+        return Err("Rule pack must include at least one candidate".to_string());
+    }
+    Ok(())
+}
+
+fn validate_direct_manifest_and_pack(
+    manifest: &RemotePluginManifest,
+    pack: &RemoteXPathRulePack,
+) -> Result<(), String> {
+    let entry = RegistryPluginEntry {
+        id: manifest.id.clone(),
+        name: manifest.name.clone(),
+        version: manifest.version.clone(),
+        kind: manifest.kind.clone(),
+        manifest: "direct-url".to_string(),
+        sha256: None,
+    };
+    validate_manifest(&entry, manifest)?;
+    validate_rule_pack(&entry, manifest, pack)
 }
 
 fn plugin_capabilities(candidates: &[XPathRuleCandidate]) -> Vec<String> {
@@ -484,5 +633,16 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|selectors| selectors.items == "//article"));
+    }
+
+    #[test]
+    fn normalizes_github_blob_plugin_urls_to_raw() {
+        assert_eq!(
+            normalize_plugin_file_url(
+                "https://github.com/example/market/blob/main/plugins/demo/plugin.json"
+            )
+            .unwrap(),
+            "https://raw.githubusercontent.com/example/market/main/plugins/demo/plugin.json"
+        );
     }
 }

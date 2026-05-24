@@ -274,6 +274,25 @@ type XPathRulePack = {
   auth?: PluginAuth | null;
 };
 
+type MarketplacePluginPack = XPathRulePack & {
+  installed: boolean;
+  sourceMarketId?: string | null;
+};
+
+type PluginMarket = {
+  id: string;
+  name: string;
+  repository: string;
+  rawBaseUrl: string;
+  branch: string;
+  builtin: boolean;
+};
+
+type PluginMarketTemplate = {
+  path: string;
+  files: string[];
+};
+
 type PluginAuthor = {
   name: string;
   evmAddress?: string | null;
@@ -593,13 +612,24 @@ let testModeRssHubSettings: RssHubSettings = {
   ...defaultRssHubSettings,
   instances: defaultRssHubSettings.instances.map((instance) => ({ ...instance })),
 };
+let testModeInstalledPluginIds = new Set<string>(["official.naixi-forum.xpath"]);
+let testModePluginMarkets: PluginMarket[] = [
+  {
+    id: "official-feaderhub",
+    name: "FeaderHub Official",
+    repository: "https://github.com/FrankieeW/FeaderHub",
+    rawBaseUrl: "https://raw.githubusercontent.com/FrankieeW/FeaderHub/main",
+    branch: "main",
+    builtin: true,
+  },
+];
 let testModeAutoRefresh: AutoRefreshConfig = {
   enabled: true,
   globalIntervalSeconds: 1800,
   pluginOverrides: [],
   nextRefreshAt: null,
 };
-const testModeXPathRulePacks: XPathRulePack[] = [
+let testModeXPathRulePacks: XPathRulePack[] = [
   {
     id: "official.naixi-forum.xpath",
     name: "Naixi Forum XPath Rules",
@@ -849,10 +879,66 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
         checkedUrl: `${baseUrl}/healthz`,
       } as T;
     }
+    case "list_plugin_markets":
+      return testModePluginMarkets as T;
+    case "add_plugin_market": {
+      const request = args?.request as { repository?: string; name?: string; branch?: string } | undefined;
+      const repo = request?.repository?.trim() || "example/feader-market";
+      const repoParts = repo.replace(/^https?:\/\/github.com\//, "").replace(/\.git$/, "").split("/");
+      const owner = repoParts[0] || "example";
+      const name = repoParts[1] || "feader-market";
+      const market: PluginMarket = {
+        id: `github-${owner.toLowerCase()}-${name.toLowerCase()}`,
+        name: request?.name?.trim() || name,
+        repository: `https://github.com/${owner}/${name}`,
+        rawBaseUrl: `https://raw.githubusercontent.com/${owner}/${name}/${request?.branch || "main"}`,
+        branch: request?.branch || "main",
+        builtin: false,
+      };
+      if (!testModePluginMarkets.some((item) => item.id === market.id)) {
+        testModePluginMarkets = [...testModePluginMarkets, market];
+      }
+      return testModePluginMarkets as T;
+    }
+    case "install_plugin_from_market": {
+      const request = args?.request as { pluginId?: string } | undefined;
+      if (request?.pluginId) testModeInstalledPluginIds.add(request.pluginId);
+      return testModeXPathRulePacks.find((pack) => pack.id === request?.pluginId) as T;
+    }
+    case "install_plugin_from_url": {
+      const pack = {
+        ...testModeXPathRulePacks[0],
+        id: "direct.example.xpath",
+        name: "Direct URL Plugin",
+        registry: String((args?.request as { url?: string } | undefined)?.url ?? "direct-url"),
+        trust: "direct-url",
+      };
+      testModeInstalledPluginIds.add(pack.id);
+      testModeXPathRulePacks = [pack, ...testModeXPathRulePacks.filter((item) => item.id !== pack.id)];
+      return pack as T;
+    }
+    case "uninstall_plugin":
+      testModeInstalledPluginIds.delete(String(args?.pluginId ?? ""));
+      return undefined as T;
+    case "list_installed_plugin_packs":
+      return testModeXPathRulePacks.filter((pack) => testModeInstalledPluginIds.has(pack.id)) as T;
+    case "create_plugin_market_template":
+      return {
+        path: "/tmp/feader-plugin-market-template",
+        files: [
+          "registry/index.json",
+          "plugins/example/plugin.json",
+          "plugins/example/xpath-rule-pack.json",
+        ],
+      } as T;
     case "list_xpath_plugin_packs":
       return testModeXPathRulePacks as T;
     case "fetch_registry_packs":
-      return testModeXPathRulePacks as T;
+      return testModeXPathRulePacks.map((pack) => ({
+        ...pack,
+        installed: testModeInstalledPluginIds.has(pack.id),
+        sourceMarketId: "official-feaderhub",
+      })) as T;
     case "update_source_title": {
       const request = args?.request as { sourceId?: number; title?: string } | undefined;
       const sourceId = Number(request?.sourceId);
@@ -1183,7 +1269,12 @@ function App() {
   const [editXPathPreview, setEditXPathPreview] = useState<XPathPreview | null>(null);
   const [editXPathStatus, setEditXPathStatus] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
-  const [xpathRulePacks, setXPathRulePacks] = useState<XPathRulePack[]>([]);
+  const [xpathRulePacks, setXPathRulePacks] = useState<MarketplacePluginPack[]>([]);
+  const [pluginMarkets, setPluginMarkets] = useState<PluginMarket[]>([]);
+  const [pluginMarketRepository, setPluginMarketRepository] = useState("");
+  const [pluginMarketName, setPluginMarketName] = useState("");
+  const [pluginInstallUrl, setPluginInstallUrl] = useState("");
+  const [pluginTemplateStatus, setPluginTemplateStatus] = useState<string | null>(null);
   const [hubSearchQuery, setHubSearchQuery] = useState("");
   const [hubCategory, setHubCategory] = useState("all");
   const [showPluginDialog, setShowPluginDialog] = useState<XPathRulePack | null>(null);
@@ -1238,6 +1329,7 @@ function App() {
     void loadWalletSession();
     void loadAiSettings();
     void loadRssHubSettings();
+    void loadPluginMarkets();
     void loadXPathPluginPacks();
     void loadAutoRefreshConfig();
     // Listen for refresh-tick events from backend scheduler
@@ -1394,16 +1486,21 @@ function App() {
 
   async function loadXPathPluginPacks(forceRefresh = false): Promise<void> {
     try {
-      const packs = await invoke<XPathRulePack[]>("fetch_registry_packs", {
+      const packs = await invoke<MarketplacePluginPack[]>("fetch_registry_packs", {
         forceRefresh,
       });
       setXPathRulePacks(packs);
       setHubRegistryStatus(forceRefresh ? "Remote registry refreshed." : "Remote registry loaded.");
     } catch (error) {
       const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
-      setXPathRulePacks(packs);
+      setXPathRulePacks(packs.map((pack) => ({ ...pack, installed: true, sourceMarketId: null })));
       setHubRegistryStatus(`Remote registry unavailable. Showing bundled packs. ${String(error)}`);
     }
+  }
+
+  async function loadPluginMarkets(): Promise<void> {
+    const markets = await invoke<PluginMarket[]>("list_plugin_markets");
+    setPluginMarkets(markets);
   }
 
   function pluginUrlFromParams(pack: XPathRulePack, params: Record<string, string>): string {
@@ -1521,6 +1618,64 @@ function App() {
     } finally {
       setIsDialogBusy(false);
     }
+  }
+
+  async function handleInstallPlugin(pack: MarketplacePluginPack): Promise<void> {
+    if (!pack.sourceMarketId) {
+      setStatus("Bundled plugin is already installed");
+      return;
+    }
+    await runTask("Installing plugin", async () => {
+      await invoke<XPathRulePack>("install_plugin_from_market", {
+        request: { marketId: pack.sourceMarketId, pluginId: pack.id },
+      });
+      await loadXPathPluginPacks(false);
+      setStatus(`Installed plugin: ${pack.name}`);
+    });
+  }
+
+  async function handleUninstallPlugin(pack: MarketplacePluginPack): Promise<void> {
+    await runTask("Uninstalling plugin", async () => {
+      await invoke<void>("uninstall_plugin", { pluginId: pack.id });
+      await loadXPathPluginPacks(false);
+      setStatus(`Uninstalled plugin: ${pack.name}`);
+    });
+  }
+
+  async function handleAddPluginMarket(): Promise<void> {
+    await runTask("Adding plugin market", async () => {
+      const markets = await invoke<PluginMarket[]>("add_plugin_market", {
+        request: {
+          repository: pluginMarketRepository,
+          name: pluginMarketName || null,
+          branch: "main",
+        },
+      });
+      setPluginMarkets(markets);
+      setPluginMarketRepository("");
+      setPluginMarketName("");
+      await loadXPathPluginPacks(true);
+      setStatus("Plugin market added");
+    }, setHubRegistryStatus);
+  }
+
+  async function handleInstallPluginUrl(): Promise<void> {
+    await runTask("Installing plugin URL", async () => {
+      const pack = await invoke<XPathRulePack>("install_plugin_from_url", {
+        request: { url: pluginInstallUrl },
+      });
+      setPluginInstallUrl("");
+      await loadXPathPluginPacks(false);
+      setStatus(`Installed plugin: ${pack.name}`);
+    }, setHubRegistryStatus);
+  }
+
+  async function handleCreatePluginMarketTemplate(): Promise<void> {
+    await runTask("Creating plugin market template", async () => {
+      const template = await invoke<PluginMarketTemplate>("create_plugin_market_template");
+      setPluginTemplateStatus(`Template created at ${template.path}`);
+      setStatus(`Plugin market template created: ${template.path}`);
+    }, setPluginTemplateStatus);
   }
 
   async function handleSaveAiSettings(input: {
@@ -2510,6 +2665,64 @@ function App() {
             </button>
           </header>
 
+          <section className="plugin-market-tools page-panel" aria-label="Plugin market management">
+            <div className="panel-heading">
+              <span>Markets</span>
+              <span>{pluginMarkets.length} configured</span>
+            </div>
+            <div className="plugin-market-list">
+              {pluginMarkets.map((market) => (
+                <div className="plugin-market-row" key={market.id}>
+                  <div>
+                    <strong>{market.name}</strong>
+                    <span>{market.repository}</span>
+                  </div>
+                  <span>{market.builtin ? "Built-in" : market.branch}</span>
+                </div>
+              ))}
+            </div>
+            <div className="plugin-market-actions">
+              <input
+                aria-label="GitHub market repository"
+                onChange={(event) => setPluginMarketRepository(event.currentTarget.value)}
+                placeholder="owner/repo or https://github.com/owner/repo"
+                value={pluginMarketRepository}
+              />
+              <input
+                aria-label="Market display name"
+                onChange={(event) => setPluginMarketName(event.currentTarget.value)}
+                placeholder="Optional market name"
+                value={pluginMarketName}
+              />
+              <button
+                disabled={isBusy || !pluginMarketRepository.trim()}
+                onClick={() => void handleAddPluginMarket()}
+                type="button"
+              >
+                Add market
+              </button>
+            </div>
+            <div className="plugin-direct-install">
+              <input
+                aria-label="Plugin install URL"
+                onChange={(event) => setPluginInstallUrl(event.currentTarget.value)}
+                placeholder="https://.../plugin.json or xpath-rule-pack.json"
+                value={pluginInstallUrl}
+              />
+              <button
+                disabled={isBusy || !pluginInstallUrl.trim()}
+                onClick={() => void handleInstallPluginUrl()}
+                type="button"
+              >
+                Install link
+              </button>
+              <button disabled={isBusy} onClick={() => void handleCreatePluginMarketTemplate()} type="button">
+                Create template market
+              </button>
+            </div>
+            {pluginTemplateStatus ? <p className="hub-registry-status">{pluginTemplateStatus}</p> : null}
+          </section>
+
           <div className="hub-search-bar">
             <input
               aria-label="Search plugins"
@@ -2535,6 +2748,8 @@ function App() {
 
           <div className="hub-stats" aria-label="Plugin statistics">
             <span>{xpathRulePacks.length} plugins available</span>
+            <span className="hub-stats-sep">·</span>
+            <span>{xpathRulePacks.filter((pack) => pack.installed).length} installed</span>
             <span className="hub-stats-sep">·</span>
             <span>{officialPacks.length} official</span>
             {communityPacks.length > 0 && (
@@ -2574,9 +2789,9 @@ function App() {
                       </div>
                       <button
                         className="hub-add-btn primary-action"
-                        onClick={() => openPluginDialog(pack)}
+                        onClick={() => pack.installed ? openPluginDialog(pack) : void handleInstallPlugin(pack)}
                       >
-                        Add Source
+                        {pack.installed ? "Add Source" : "Install"}
                       </button>
                     </div>
                   </article>
@@ -2624,10 +2839,19 @@ function App() {
                       </div>
                       <button
                         className="hub-add-btn"
-                        onClick={() => openPluginDialog(pack)}
+                        onClick={() => pack.installed ? openPluginDialog(pack) : void handleInstallPlugin(pack)}
                       >
-                        Add Source
+                        {pack.installed ? "Add Source" : "Install"}
                       </button>
+                      {pack.installed && !pack.trust.includes("bundled") ? (
+                        <button
+                          className="hub-remove-btn"
+                          onClick={() => void handleUninstallPlugin(pack)}
+                          type="button"
+                        >
+                          Uninstall
+                        </button>
+                      ) : null}
                     </div>
                   </article>
                 ))}

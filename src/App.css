@@ -1175,6 +1175,68 @@ select:disabled {
   line-height: 1.4;
 }
 
+.plugin-market-tools {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.plugin-market-list {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-market-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--color-panel-soft);
+}
+
+.plugin-market-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plugin-market-row strong,
+.plugin-market-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-market-row span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.plugin-market-actions,
+.plugin-direct-install {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) auto;
+  gap: 8px;
+}
+
+.plugin-direct-install {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.plugin-market-actions input,
+.plugin-direct-install input {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--color-text);
+  background: var(--color-panel-strong);
+}
+
 /* Sections */
 
 .hub-section {
@@ -1538,6 +1600,11 @@ select:disabled {
 
 .hub-add-btn:hover {
   opacity: 0.88;
+}
+
+.hub-remove-btn {
+  margin-top: 6px;
+  align-self: flex-start;
 }
 
 .source-health-strip {

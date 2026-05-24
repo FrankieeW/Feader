@@ -9,7 +9,8 @@ use rusqlite::{params, Connection, OptionalExtension, ToSql};
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
     PluginRefreshOverride, RssHubSourceConfig, Source, WalletLoginChallenge, WalletSession,
-    XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
+    XPathRulePack, XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB,
+    SOURCE_KIND_XPATH,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -307,6 +308,52 @@ impl AppDatabase {
         }
 
         Ok(Some(value))
+    }
+
+    /// Persist an installed static plugin pack locally.
+    pub fn install_plugin_pack(&self, pack: &XPathRulePack) -> Result<(), String> {
+        let json = serde_json::to_string(pack).map_err(|error| error.to_string())?;
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO installed_plugin_packs (plugin_id, version, pack_json, installed_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)
+                 ON CONFLICT(plugin_id) DO UPDATE SET
+                    version = excluded.version,
+                    pack_json = excluded.pack_json,
+                    updated_at = excluded.updated_at",
+                params![pack.id, pack.version, json, now_string()],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Remove one installed plugin pack.
+    pub fn uninstall_plugin_pack(&self, plugin_id: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM installed_plugin_packs WHERE plugin_id = ?1",
+                params![plugin_id],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Return all installed plugin packs.
+    pub fn list_installed_plugin_packs(&self) -> Result<Vec<XPathRulePack>, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let mut statement = connection
+            .prepare("SELECT pack_json FROM installed_plugin_packs ORDER BY installed_at DESC")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        rows.map(|row| {
+            let json = row.map_err(|error| error.to_string())?;
+            serde_json::from_str::<XPathRulePack>(&json).map_err(|error| error.to_string())
+        })
+        .collect()
     }
 
     /// Upsert AI settings; a blank `api_key` keeps the existing stored key.
@@ -1062,6 +1109,14 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             refresh_interval_seconds INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS installed_plugin_packs (
+            plugin_id    TEXT PRIMARY KEY,
+            version      TEXT NOT NULL,
+            pack_json    TEXT NOT NULL,
+            installed_at TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
         CREATE INDEX IF NOT EXISTS idx_wallet_login_challenges_expires_at
@@ -1632,5 +1687,31 @@ mod tests {
 
         assert_eq!(changed, 2);
         assert!(unread.is_empty());
+    }
+
+    #[test]
+    fn plugin_pack_install_round_trip_and_uninstall() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let pack = crate::plugin_registry::bundled_xpath_rule_packs()
+            .into_iter()
+            .next()
+            .expect("bundled pack exists");
+
+        database
+            .install_plugin_pack(&pack)
+            .expect("plugin installs");
+        let installed = database
+            .list_installed_plugin_packs()
+            .expect("installed plugins list");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].id, pack.id);
+
+        database
+            .uninstall_plugin_pack(&pack.id)
+            .expect("plugin uninstalls");
+        assert!(database
+            .list_installed_plugin_packs()
+            .expect("installed plugins list")
+            .is_empty());
     }
 }

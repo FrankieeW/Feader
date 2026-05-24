@@ -14,15 +14,16 @@ use std::fs;
 use db::AppDatabase;
 use hex::FromHex;
 use models::{
-    AddRssHubInstanceRequest, AddRssHubSourceRequest, AddSourceRequest, AddXPathSourceRequest,
-    AiSettings, AiSettingsInput, Article, ArticleFilter, AutoRefreshConfig,
-    CreateWalletLoginChallengeRequest, CredentialCheck, PluginCredential,
-    PreviewXPathSourceRequest, RefreshTickEvent, RegistryIndex, RssHubInstance,
-    RssHubInstanceCheck, RssHubSettings, RssHubSourceConfig, Source, SourceRefreshResult,
-    UpdateRssHubSourceInstanceRequest, UpdateSourceTitleRequest, UpdateXPathSourceRequest,
-    VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack,
-    XPathSelectors, XPathSourceSuggestion, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS,
-    SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
+    AddPluginMarketRequest, AddRssHubInstanceRequest, AddRssHubSourceRequest, AddSourceRequest,
+    AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter, AutoRefreshConfig,
+    CreateWalletLoginChallengeRequest, CredentialCheck, InstallPluginFromMarketRequest,
+    InstallPluginFromUrlRequest, MarketplacePluginPack, PluginCredential, PluginMarket,
+    PluginMarketTemplate, PreviewXPathSourceRequest, RefreshTickEvent, RegistryIndex,
+    RssHubInstance, RssHubInstanceCheck, RssHubSettings, RssHubSourceConfig, Source,
+    SourceRefreshResult, UpdateRssHubSourceInstanceRequest, UpdateSourceTitleRequest,
+    UpdateXPathSourceRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
+    XPathPreview, XPathRulePack, XPathSelectors, XPathSourceSuggestion, SOURCE_KIND_JSON_API,
+    SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use std::sync::Arc;
@@ -169,6 +170,7 @@ fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 const RSSHUB_SETTINGS_KEY: &str = "rsshub_settings";
 const RSSHUB_DEFAULT_INSTANCE_ID: &str = "rsshub-rssforever";
+const PLUGIN_MARKETS_KEY: &str = "plugin_markets";
 
 /// Fetch the plugin registry from the remote FeaderHub repository.
 /// Results are cached locally with a 24-hour TTL.
@@ -176,74 +178,368 @@ const RSSHUB_DEFAULT_INSTANCE_ID: &str = "rsshub-rssforever";
 async fn fetch_registry_packs(
     force_refresh: Option<bool>,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<XPathRulePack>, String> {
+) -> Result<Vec<MarketplacePluginPack>, String> {
     load_registry_packs(&database, force_refresh.unwrap_or(false)).await
 }
 
 async fn load_registry_packs(
     database: &AppDatabase,
     force_refresh: bool,
-) -> Result<Vec<XPathRulePack>, String> {
-    let index = if force_refresh {
-        fetch_and_cache_registry_index(database).await?
-    } else {
-        match database.get_cache("registry_index", REGISTRY_CACHE_TTL_SECONDS)? {
-            Some(cached) => match serde_json::from_str::<RegistryIndex>(&cached) {
-                Ok(index) if registry_cache_is_usable(&index) => index,
-                _ => fetch_and_cache_registry_index(database).await?,
-            },
-            None => fetch_and_cache_registry_index(database).await?,
-        }
-    };
-
+) -> Result<Vec<MarketplacePluginPack>, String> {
+    let markets = load_plugin_markets(database)?;
+    let installed_ids = installed_plugin_ids(database)?;
     let mut all_packs = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
 
-    for entry in index.plugins {
-        if !seen_ids.insert(entry.id.clone()) {
-            continue;
-        }
-
-        let cache_key = format!(
-            "plugin_pack_{}_{}_{}",
-            entry.id,
-            entry.version,
-            entry.sha256.as_deref().unwrap_or("nosha")
-        );
-        let pack_json = if force_refresh {
-            None
-        } else {
-            match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
-                Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
-                None => None,
+    for market in markets {
+        let index = match load_market_index(database, &market, force_refresh).await {
+            Ok(index) => index,
+            Err(error) => {
+                eprintln!("Failed to fetch market {}: {error}", market.id);
+                continue;
             }
         };
-
-        if let Some(pack) = pack_json {
-            all_packs.push(pack);
-        } else {
-            match plugin_registry::fetch_remote_plugin_pack(&entry).await {
-                Ok(pack) => {
-                    if let Ok(json) = serde_json::to_string(&pack) {
-                        let _ = database.set_cache(&cache_key, &json);
-                    }
-                    all_packs.push(pack);
-                }
-                Err(error) => {
-                    eprintln!("Failed to fetch plugin {}: {error}", entry.id);
-                }
+        for entry in index.plugins {
+            if !seen_ids.insert(entry.id.clone()) {
+                continue;
             }
+
+            let cache_key = market_plugin_cache_key(&market.id, &entry);
+            let pack_json = if force_refresh {
+                None
+            } else {
+                database
+                    .get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)?
+                    .and_then(|cached| serde_json::from_str::<XPathRulePack>(&cached).ok())
+            };
+
+            let pack = match pack_json {
+                Some(pack) => pack,
+                None => {
+                    match plugin_registry::fetch_remote_plugin_pack_from_market(&market, &entry)
+                        .await
+                    {
+                        Ok(pack) => {
+                            if let Ok(json) = serde_json::to_string(&pack) {
+                                let _ = database.set_cache(&cache_key, &json);
+                            }
+                            pack
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to fetch plugin {}: {error}", entry.id);
+                            continue;
+                        }
+                    }
+                }
+            };
+            all_packs.push(MarketplacePluginPack {
+                installed: installed_ids.contains(&pack.id),
+                source_market_id: Some(market.id.clone()),
+                pack,
+            });
+        }
+    }
+
+    for pack in database.list_installed_plugin_packs()? {
+        if seen_ids.insert(pack.id.clone()) {
+            all_packs.push(MarketplacePluginPack {
+                installed: true,
+                source_market_id: None,
+                pack,
+            });
         }
     }
 
     Ok(all_packs)
 }
 
-async fn fetch_and_cache_registry_index(database: &AppDatabase) -> Result<RegistryIndex, String> {
-    let index = plugin_registry::fetch_registry_index().await?;
+async fn load_market_index(
+    database: &AppDatabase,
+    market: &PluginMarket,
+    force_refresh: bool,
+) -> Result<RegistryIndex, String> {
+    if force_refresh {
+        return fetch_and_cache_market_index(database, market).await;
+    }
+    let cache_key = format!("registry_index_{}", market.id);
+    match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
+        Some(cached) => match serde_json::from_str::<RegistryIndex>(&cached) {
+            Ok(index) if registry_cache_is_usable(&index) => Ok(index),
+            _ => fetch_and_cache_market_index(database, market).await,
+        },
+        None => fetch_and_cache_market_index(database, market).await,
+    }
+}
+
+async fn fetch_and_cache_market_index(
+    database: &AppDatabase,
+    market: &PluginMarket,
+) -> Result<RegistryIndex, String> {
+    let index = plugin_registry::fetch_registry_index_from_market(market).await?;
     let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
-    database.set_cache("registry_index", &json)?;
+    database.set_cache(&format!("registry_index_{}", market.id), &json)?;
     Ok(index)
+}
+
+fn market_plugin_cache_key(market_id: &str, entry: &models::RegistryPluginEntry) -> String {
+    format!(
+        "plugin_pack_{}_{}_{}_{}",
+        market_id,
+        entry.id,
+        entry.version,
+        entry.sha256.as_deref().unwrap_or("nosha")
+    )
+}
+
+fn installed_plugin_ids(
+    database: &AppDatabase,
+) -> Result<std::collections::HashSet<String>, String> {
+    Ok(database
+        .list_installed_plugin_packs()?
+        .into_iter()
+        .map(|pack| pack.id)
+        .collect())
+}
+
+fn load_plugin_markets(database: &AppDatabase) -> Result<Vec<PluginMarket>, String> {
+    let mut markets = database
+        .get_setting(PLUGIN_MARKETS_KEY)?
+        .and_then(|json| serde_json::from_str::<Vec<PluginMarket>>(&json).ok())
+        .unwrap_or_default();
+    let official = plugin_registry::official_plugin_market();
+    if !markets.iter().any(|market| market.id == official.id) {
+        markets.insert(0, official);
+    }
+    Ok(markets)
+}
+
+fn save_plugin_markets(database: &AppDatabase, markets: &[PluginMarket]) -> Result<(), String> {
+    let json = serde_json::to_string(markets).map_err(|error| error.to_string())?;
+    database.set_setting(PLUGIN_MARKETS_KEY, &json)
+}
+
+#[tauri::command]
+fn list_plugin_markets(
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<PluginMarket>, String> {
+    load_plugin_markets(&database)
+}
+
+#[tauri::command]
+async fn add_plugin_market(
+    request: AddPluginMarketRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<PluginMarket>, String> {
+    let market = plugin_market_from_github(&request)?;
+    plugin_registry::fetch_registry_index_from_market(&market).await?;
+    let mut markets = load_plugin_markets(&database)?;
+    if markets.iter().any(|item| item.id == market.id) {
+        return Err("Plugin market already exists".to_string());
+    }
+    markets.push(market);
+    save_plugin_markets(&database, &markets)?;
+    load_plugin_markets(&database)
+}
+
+#[tauri::command]
+async fn install_plugin_from_market(
+    request: InstallPluginFromMarketRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<XPathRulePack, String> {
+    let markets = load_plugin_markets(&database)?;
+    let market = markets
+        .into_iter()
+        .find(|market| market.id == request.market_id)
+        .ok_or_else(|| "Plugin market not found".to_string())?;
+    let index = load_market_index(&database, &market, false).await?;
+    let entry = index
+        .plugins
+        .into_iter()
+        .find(|entry| entry.id == request.plugin_id)
+        .ok_or_else(|| "Plugin not found in market".to_string())?;
+    let cache_key = market_plugin_cache_key(&market.id, &entry);
+    let pack = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
+        Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
+        None => None,
+    };
+    let pack = match pack {
+        Some(pack) => pack,
+        None => {
+            let pack =
+                plugin_registry::fetch_remote_plugin_pack_from_market(&market, &entry).await?;
+            if let Ok(json) = serde_json::to_string(&pack) {
+                let _ = database.set_cache(&cache_key, &json);
+            }
+            pack
+        }
+    };
+    database.install_plugin_pack(&pack)?;
+    Ok(pack)
+}
+
+#[tauri::command]
+async fn install_plugin_from_url(
+    request: InstallPluginFromUrlRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<XPathRulePack, String> {
+    let pack = plugin_registry::fetch_plugin_pack_from_url(&request.url).await?;
+    database.install_plugin_pack(&pack)?;
+    Ok(pack)
+}
+
+#[tauri::command]
+fn uninstall_plugin(
+    plugin_id: String,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<(), String> {
+    database.uninstall_plugin_pack(&plugin_id)
+}
+
+#[tauri::command]
+fn list_installed_plugin_packs(
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<XPathRulePack>, String> {
+    let mut packs = plugin_registry::bundled_xpath_rule_packs();
+    packs.extend(database.list_installed_plugin_packs()?);
+    Ok(packs)
+}
+
+#[tauri::command]
+fn create_plugin_market_template(
+    app_handle: tauri::AppHandle,
+) -> Result<PluginMarketTemplate, String> {
+    let root = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("plugin-market-template");
+    fs::create_dir_all(root.join("registry")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root.join("plugins/example")).map_err(|error| error.to_string())?;
+    let index = r#"{
+  "schemaVersion": "feader-registry/v1",
+  "updatedAt": "2026-05-24T00:00:00Z",
+  "plugins": [
+    {
+      "id": "example.generic.xpath",
+      "name": "Example Generic XPath",
+      "version": "0.1.0",
+      "kind": "static-xpath-rule-pack",
+      "manifest": "plugins/example/plugin.json",
+      "sha256": "replace-with-sha256-of-xpath-rule-pack-json"
+    }
+  ]
+}
+"#;
+    let manifest = r#"{
+  "id": "example.generic.xpath",
+  "name": "Example Generic XPath",
+  "version": "0.1.0",
+  "kind": "static-xpath-rule-pack",
+  "feaderApiVersion": "xpath-rule-pack/v1",
+  "description": "Starter plugin pack for a GitHub-hosted Feader marketplace.",
+  "entry": "xpath-rule-pack.json",
+  "authors": [{ "name": "Your Name" }]
+}
+"#;
+    let pack = r#"{
+  "schemaVersion": "xpath-rule-pack/v1",
+  "id": "example.generic.xpath",
+  "name": "Example Generic XPath",
+  "version": "0.1.0",
+  "description": "Replace these selectors with a real site rule.",
+  "candidates": [
+    {
+      "id": "generic-article-list",
+      "pageType": "article-list",
+      "priority": 10,
+      "detect": [],
+      "promptRule": "Use the smallest repeated article item with one stable title link.",
+      "selectors": {
+        "items": "//article",
+        "title": ".//h2/a",
+        "url": ".//h2/a/@href",
+        "summary": ".//p[1]",
+        "publishedAt": ".//time/@datetime",
+        "author": "",
+        "content": ".",
+        "image": ".//img/@src",
+        "nextPage": ""
+      }
+    }
+  ]
+}
+"#;
+    let files = [
+        ("registry/index.json", index),
+        ("plugins/example/plugin.json", manifest),
+        ("plugins/example/xpath-rule-pack.json", pack),
+    ];
+    for (path, content) in files {
+        fs::write(root.join(path), content).map_err(|error| error.to_string())?;
+    }
+    Ok(PluginMarketTemplate {
+        path: root.to_string_lossy().to_string(),
+        files: vec![
+            "registry/index.json".to_string(),
+            "plugins/example/plugin.json".to_string(),
+            "plugins/example/xpath-rule-pack.json".to_string(),
+        ],
+    })
+}
+
+fn plugin_market_from_github(request: &AddPluginMarketRequest) -> Result<PluginMarket, String> {
+    let branch = request.branch.as_deref().unwrap_or("main").trim();
+    let branch = if branch.is_empty() { "main" } else { branch };
+    let repo = request.repository.trim().trim_end_matches('/');
+    let (owner, name) = parse_github_repo(repo)?;
+    let id = format!(
+        "github-{}-{}",
+        owner.to_ascii_lowercase(),
+        name.to_ascii_lowercase()
+    );
+    let repository = format!("https://github.com/{owner}/{name}");
+    let market_name = request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&name);
+    Ok(PluginMarket {
+        id,
+        name: market_name.to_string(),
+        repository,
+        raw_base_url: format!("https://raw.githubusercontent.com/{owner}/{name}/{branch}"),
+        branch: branch.to_string(),
+        builtin: false,
+    })
+}
+
+fn parse_github_repo(value: &str) -> Result<(String, String), String> {
+    let without_git = value.trim_end_matches(".git");
+    if let Some(rest) = without_git.strip_prefix("https://github.com/") {
+        return parse_owner_repo(rest);
+    }
+    if let Some(rest) = without_git.strip_prefix("http://github.com/") {
+        return parse_owner_repo(rest);
+    }
+    if let Some(rest) = without_git.strip_prefix("github.com/") {
+        return parse_owner_repo(rest);
+    }
+    parse_owner_repo(without_git)
+}
+
+fn parse_owner_repo(value: &str) -> Result<(String, String), String> {
+    let mut parts = value.split('/').filter(|part| !part.trim().is_empty());
+    let owner = parts
+        .next()
+        .ok_or_else(|| "GitHub owner is required".to_string())?;
+    let repo = parts
+        .next()
+        .ok_or_else(|| "GitHub repo is required".to_string())?;
+    if owner.contains("..") || repo.contains("..") || parts.next().is_some() {
+        return Err("Use a GitHub repository in owner/repo form".to_string());
+    }
+    Ok((owner.to_string(), repo.to_string()))
 }
 
 fn registry_cache_is_usable(index: &RegistryIndex) -> bool {
@@ -1168,6 +1464,27 @@ mod tests {
             .iter()
             .any(|instance| instance.id == "custom-example" && !instance.builtin));
     }
+
+    #[test]
+    fn plugin_market_from_github_normalizes_repo_urls() {
+        let market = plugin_market_from_github(&AddPluginMarketRequest {
+            repository: "https://github.com/example/feader-market.git".to_string(),
+            name: Some("Example Market".to_string()),
+            branch: Some("stable".to_string()),
+        })
+        .expect("market parses");
+
+        assert_eq!(market.id, "github-example-feader-market");
+        assert_eq!(
+            market.repository,
+            "https://github.com/example/feader-market"
+        );
+        assert_eq!(
+            market.raw_base_url,
+            "https://raw.githubusercontent.com/example/feader-market/stable"
+        );
+        assert_eq!(market.name, "Example Market");
+    }
 }
 
 // ── Auto-refresh Tauri commands ────────────────────────────────────
@@ -1324,6 +1641,13 @@ pub fn run() {
             get_plugin_credential,
             set_plugin_credential,
             check_plugin_credential,
+            list_plugin_markets,
+            add_plugin_market,
+            install_plugin_from_market,
+            install_plugin_from_url,
+            uninstall_plugin,
+            list_installed_plugin_packs,
+            create_plugin_market_template,
             get_rsshub_settings,
             set_rsshub_global_instance,
             add_rsshub_instance,

@@ -373,6 +373,61 @@ pub struct XPathRulePack {
     pub auth: Option<PluginAuth>,
 }
 
+/// A plugin pack as shown in the marketplace, including local install state.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplacePluginPack {
+    #[serde(flatten)]
+    pub pack: XPathRulePack,
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_market_id: Option<String>,
+}
+
+/// A configured plugin marketplace repository.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMarket {
+    pub id: String,
+    pub name: String,
+    pub repository: String,
+    pub raw_base_url: String,
+    pub branch: String,
+    pub builtin: bool,
+}
+
+/// Request body for adding a GitHub-hosted plugin marketplace.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddPluginMarketRequest {
+    pub repository: String,
+    pub name: Option<String>,
+    pub branch: Option<String>,
+}
+
+/// Request body for installing a plugin from a configured marketplace.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPluginFromMarketRequest {
+    pub market_id: String,
+    pub plugin_id: String,
+}
+
+/// Request body for installing a plugin directly from a URL.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPluginFromUrlRequest {
+    pub url: String,
+}
+
+/// Filesystem result of creating a starter marketplace template.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMarketTemplate {
+    pub path: String,
+    pub files: Vec<String>,
+}
+
 /// Public author metadata displayed in the plugin Hub.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
