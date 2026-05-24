@@ -58,6 +58,10 @@ temp/
 # Visual brainstorm companion
 .superpowers/
 
+# Agentic planning artifacts
+docs/superpowers/plans/
+docs/superpowers/specs/
+
 # AI
 .omx/
 .omc/
