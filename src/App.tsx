@@ -620,6 +620,7 @@ function App() {
   const [xpathTitle, setXPathTitle] = useState("");
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
+  const [xpathStatus, setXPathStatus] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
   const [status, setStatus] = useState("Ready");
@@ -788,7 +789,11 @@ function App() {
     event.preventDefault();
     const url = feedUrl.trim();
     if (!url) {
-      setStatus("Enter a feed URL first.");
+      const message = "Enter a feed URL first.";
+      setStatus(message);
+      if (sourceInputMode === "xpath") {
+        setXPathStatus(message);
+      }
       return;
     }
 
@@ -806,21 +811,25 @@ function App() {
       setFeedUrl("");
       setXPathTitle("");
       setXPathPreview(null);
+      setXPathStatus(null);
       setShowSourceComposer(false);
       setSelectedSourceId(source.id);
       setFilterMode("all");
       await loadData(source.id, "all", undefined);
       setStatus(`Added ${source.title}`);
-    });
+    }, sourceInputMode === "xpath" ? setXPathStatus : undefined);
   }
 
   async function handlePreviewXPath(): Promise<void> {
     const url = feedUrl.trim();
     if (!url) {
-      setStatus("Enter a page URL first.");
+      const message = "Enter a page URL first.";
+      setStatus(message);
+      setXPathStatus(message);
       return;
     }
 
+    setXPathStatus("Previewing XPath selectors...");
     await runTask("Previewing XPath", async () => {
       const preview = await invoke<XPathPreview>("preview_xpath_source", {
         request: {
@@ -829,23 +838,30 @@ function App() {
         },
       });
       setXPathPreview(preview);
-      setStatus(`Preview extracted ${preview.articles.length} articles`);
-    });
+      const message = `Preview extracted ${preview.articles.length} articles`;
+      setStatus(message);
+      setXPathStatus(message);
+    }, setXPathStatus);
   }
 
   async function handleSuggestXPath(): Promise<void> {
     const url = feedUrl.trim();
     if (!url) {
-      setStatus("Enter a page URL first.");
+      const message = "Enter a page URL first.";
+      setStatus(message);
+      setXPathStatus(message);
       return;
     }
 
+    setXPathStatus("Suggesting selectors with AI...");
     await runTask("Suggesting selectors", async () => {
       const suggested = await invoke<XPathSelectors>("suggest_xpath_source", { url });
       setXPathSelectors({ ...defaultXPathSelectors, ...suggested });
       setXPathPreview(null);
-      setStatus("AI suggested selectors. Run Preview to validate.");
-    });
+      const message = "AI suggested selectors. Run Preview to validate.";
+      setStatus(message);
+      setXPathStatus(message);
+    }, setXPathStatus);
   }
 
   async function handleSelectSource(sourceId?: number): Promise<void> {
@@ -1050,13 +1066,19 @@ function App() {
     localStorage.removeItem(entryLayoutStorageKey);
   }
 
-  async function runTask(label: string, task: () => Promise<void>): Promise<void> {
+  async function runTask(
+    label: string,
+    task: () => Promise<void>,
+    onError?: (message: string) => void,
+  ): Promise<void> {
     setIsBusy(true);
     setStatus(label);
     try {
       await task();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message);
+      onError?.(message);
     } finally {
       setIsBusy(false);
     }
@@ -1360,6 +1382,7 @@ function App() {
                         onTitleChange={setXPathTitle}
                         preview={xpathPreview}
                         selectors={xpathSelectors}
+                        status={xpathStatus}
                         title={xpathTitle}
                       />
                     ) : (
@@ -2183,6 +2206,7 @@ function XPathSourceForm({
   onTitleChange,
   preview,
   selectors,
+  status,
   title,
 }: {
   aiAvailable: boolean;
@@ -2193,6 +2217,7 @@ function XPathSourceForm({
   onTitleChange: (title: string) => void;
   preview: XPathPreview | null;
   selectors: XPathSelectors;
+  status: string | null;
   title: string;
 }) {
   const previewArticles = preview?.articles ?? [];
@@ -2303,6 +2328,7 @@ function XPathSourceForm({
       <button disabled={isBusy} onClick={onPreview} type="button">
         Preview
       </button>
+      {status ? <p className="xpath-status">{status}</p> : null}
       {preview ? (
         <div className="xpath-diagnostics" aria-label="XPath selector diagnostics">
           {preview.diagnostics.map((diagnostic) => (
