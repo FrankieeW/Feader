@@ -38,7 +38,9 @@ fn normalize_html(raw: &str) -> String {
         .replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
         .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
         .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", "");
-    escape_invalid_xml_ampersands(&strip_leading_doctype(&without_namespaces))
+    sanitize_xml_attribute_values(&escape_invalid_xml_ampersands(&strip_leading_doctype(
+        &without_namespaces,
+    )))
 }
 
 fn strip_leading_doctype(value: &str) -> String {
@@ -101,6 +103,37 @@ fn starts_numeric_xml_entity(value: &str) -> bool {
         return end > 0 && rest[..end].chars().all(|ch| ch.is_ascii_digit());
     }
     false
+}
+
+fn sanitize_xml_attribute_values(value: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    let mut in_tag = false;
+    let mut quote: Option<char> = None;
+
+    for ch in value.chars() {
+        match (in_tag, quote, ch) {
+            (false, _, '<') => {
+                in_tag = true;
+                sanitized.push(ch);
+            }
+            (true, None, '>') => {
+                in_tag = false;
+                sanitized.push(ch);
+            }
+            (true, None, '"' | '\'') => {
+                quote = Some(ch);
+                sanitized.push(ch);
+            }
+            (true, Some(active_quote), current) if current == active_quote => {
+                quote = None;
+                sanitized.push(ch);
+            }
+            (true, Some(_), '<') => sanitized.push_str("&lt;"),
+            _ => sanitized.push(ch),
+        }
+    }
+
+    sanitized
 }
 
 /// Fetch a static page and extract articles with XPath selectors.
@@ -1068,6 +1101,17 @@ mod tests {
             feed.articles[0].url,
             "https://example.com/one?genre=a&secure=b"
         );
+    }
+
+    #[test]
+    fn escapes_markup_inside_attribute_values_for_xml_xpath_parse() {
+        let html = r#"<html><body><input type="hidden" value="<p>Hidden HTML</p>"><article><h2><a href="/one">First</a></h2></article></body></html>"#;
+        let normalized = normalize_html_document(html).expect("normalizes");
+        assert!(normalized.contains("value=\"&lt;p>Hidden HTML&lt;/p>\""));
+
+        let feed = parse_xpath_source("https://example.com/blog/", &normalized, &selectors())
+            .expect("xpath extracts after escaping attribute markup");
+        assert_eq!(feed.articles.len(), 1);
     }
 
     #[test]
