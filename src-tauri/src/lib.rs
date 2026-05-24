@@ -151,7 +151,7 @@ async fn check_plugin_credential(
 /// Return bundled static XPath plugin packs.
 #[tauri::command]
 fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
-    Vec::new()
+    plugin_registry::bundled_xpath_rule_packs()
 }
 
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
