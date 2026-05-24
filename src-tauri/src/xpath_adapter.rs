@@ -88,6 +88,21 @@ pub async fn preview_xpath_source(
     preview_xpath_document(url, &normalize_html(&body), selectors)
 }
 
+/// Fetch a URL and return its normalized (real-world-tolerant) XHTML.
+pub async fn fetch_normalized(url: &str) -> Result<String, String> {
+    let body = fetch_page(url).await?;
+    Ok(normalize_html(&body))
+}
+
+/// True when `expression` compiles as a valid XPath.
+pub fn is_valid_xpath(expression: &str) -> bool {
+    Factory::new()
+        .build(expression)
+        .ok()
+        .flatten()
+        .is_some()
+}
+
 async fn fetch_page(url: &str) -> Result<String, String> {
     let response = reqwest::Client::new()
         .get(url)
