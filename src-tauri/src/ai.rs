@@ -102,6 +102,7 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         },
     })
 }

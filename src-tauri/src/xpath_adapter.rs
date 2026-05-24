@@ -9,8 +9,8 @@ use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
 use crate::models::{
-    env_reference_name, ParsedArticle, ParsedFeed, XPathCustomFieldScope, XPathFieldDiagnostic,
-    XPathPreview, XPathRulePack, XPathSelectors,
+    env_reference_name, ParsedArticle, ParsedFeed, ReaderConfig, XPathCustomFieldScope,
+    XPathFieldDiagnostic, XPathPreview, XPathRulePack, XPathSelectors,
 };
 use crate::plugin_registry;
 
@@ -348,6 +348,53 @@ pub fn looks_like_interstitial_document(document: &str) -> bool {
     browser_check_title || cloudflare_interstitial
 }
 
+/// Effective cookie precedence: non-empty source override → plugin cookie → none.
+pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) -> Option<String> {
+    let pick = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    pick(source_cookie).or_else(|| pick(plugin_cookie))
+}
+
+/// True when `logged_in_xpath` matches at least one node in `document`.
+pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool, String> {
+    let normalized = normalize_html_document(document)?;
+    let package = parser::parse(&normalized).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let root = Node::Root(package.as_document().root());
+    let xpath = compile_xpath(logged_in_xpath)?;
+    let context = Context::new();
+    match xpath.evaluate(&context, root).map_err(|error| error.to_string())? {
+        Value::Nodeset(nodes) => Ok(!nodes.document_order().is_empty()),
+        Value::Boolean(value) => Ok(value),
+        Value::String(value) => Ok(!value.is_empty()),
+        Value::Number(value) => Ok(value != 0.0),
+    }
+}
+
+/// Fetch `check_url` with the given cookie and report whether the login marker is present.
+pub async fn check_login_state(
+    check_url: &str,
+    cookie: Option<&str>,
+    logged_in_xpath: &str,
+) -> Result<(bool, String), String> {
+    let mut selectors = XPathSelectors::default();
+    selectors.cookie = cookie.map(str::to_string);
+    let body = fetch_page(check_url, &selectors).await?;
+    if looks_like_interstitial_document(&body) {
+        return Ok((false, "返回了反爬/浏览器校验页,无法确认登录态".to_string()));
+    }
+    match evaluate_logged_in(&body, logged_in_xpath) {
+        Ok(true) => Ok((true, "cookie 有效,已登录".to_string())),
+        Ok(false) => Ok((false, "cookie 失效或已过期(未检测到登录标志)".to_string())),
+        Err(error) => Ok((false, format!("校验失败: {error}"))),
+    }
+}
+
 /// Extract articles from a static HTML/XML document string.
 pub fn parse_xpath_source(
     base_url: &str,
@@ -487,6 +534,11 @@ async fn fetch_detail_content(
         .transpose()?
         .flatten()
         .map(|html| apply_content_cleanup(&html, selectors))
+        .transpose()?
+        .map(|html| match &selectors.reader {
+            Some(reader) => apply_reader_transforms(&html, url, reader),
+            None => Ok(html),
+        })
         .transpose()?;
     let fields = custom_fields_json(root, selectors, XPathCustomFieldScope::Detail)?;
     Ok((content, fields))
@@ -517,6 +569,99 @@ fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
     evaluate_content_html(Node::Root(package.as_document().root()), Some(selector))
+}
+
+/// Apply plugin reader transforms to extracted detail HTML.
+pub fn apply_reader_transforms(
+    html: &str,
+    base_url: &str,
+    reader: &ReaderConfig,
+) -> Result<String, String> {
+    let mut out = html.to_string();
+    for selector in &reader.remove_selectors {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            continue;
+        }
+        for fragment in evaluate_node_html_fragments(&out, selector)? {
+            out = out.replace(&fragment, "");
+        }
+    }
+    // Both flags drive URL absolutization today. `rewriteLinks` is reserved for
+    // future strategies (e.g., proxy/mirror rewriting) while `resolveRelativeUrls`
+    // covers the common relative→absolute case.
+    if reader.resolve_relative_urls || reader.rewrite_links {
+        if let Ok(base) = url::Url::parse(base_url) {
+            out = rewrite_attr_urls(&out, &base, "href");
+            out = rewrite_attr_urls(&out, &base, "src");
+        }
+    }
+    Ok(out)
+}
+
+fn rewrite_attr_urls(html: &str, base: &url::Url, attr: &str) -> String {
+    let pattern = format!(r#"(?i){attr}\s*=\s*"([^"]*)""#);
+    let regex = match Regex::new(&pattern) {
+        Ok(regex) => regex,
+        Err(_) => return html.to_string(),
+    };
+    regex
+        .replace_all(html, |caps: &regex::Captures| {
+            let raw = &caps[1];
+            match base.join(raw) {
+                Ok(joined) => format!("{attr}=\"{}\"", joined),
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .to_string()
+}
+
+fn evaluate_node_html_fragments(document: &str, selector: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_html_document(document)?;
+    let package = parser::parse(&normalized).map_err(|error| {
+        format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
+    })?;
+    let root = Node::Root(package.as_document().root());
+    let xpath = compile_xpath(selector)?;
+    let context = Context::new();
+    let mut fragments = Vec::new();
+    if let Value::Nodeset(nodes) = xpath.evaluate(&context, root).map_err(|e| e.to_string())? {
+        for node in nodes.document_order() {
+            if let Some(html) = serialize_node_html(node) {
+                fragments.push(html);
+            }
+        }
+    }
+    Ok(fragments)
+}
+
+fn serialize_node_html(node: Node<'_>) -> Option<String> {
+    match node {
+        Node::Element(element) => {
+            let mut out = String::new();
+            let name = element.name().local_part();
+            out.push('<');
+            out.push_str(name);
+            for attribute in element.attributes() {
+                out.push(' ');
+                out.push_str(attribute.name().local_part());
+                out.push_str("=\"");
+                out.push_str(&escape_html(attribute.value(), true));
+                out.push('"');
+            }
+            out.push('>');
+            if !is_void_element(name) {
+                for child in element.children() {
+                    serialize_child(child, &mut out);
+                }
+                out.push_str("</");
+                out.push_str(name);
+                out.push('>');
+            }
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 fn apply_content_cleanup(value: &str, selectors: &XPathSelectors) -> Result<String, String> {
@@ -1298,7 +1443,53 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         }
+    }
+
+    #[test]
+    fn resolves_cookie_precedence() {
+        // source override wins
+        assert_eq!(
+            resolve_cookie(Some("src=1"), Some("plugin=2")).as_deref(),
+            Some("src=1")
+        );
+        // falls back to plugin cookie
+        assert_eq!(
+            resolve_cookie(None, Some("plugin=2")).as_deref(),
+            Some("plugin=2")
+        );
+        assert_eq!(resolve_cookie(Some("   "), Some("plugin=2")).as_deref(), Some("plugin=2"));
+        // none
+        assert_eq!(resolve_cookie(None, None), None);
+        assert_eq!(resolve_cookie(Some(""), None), None);
+    }
+
+    #[test]
+    fn evaluates_logged_in_marker() {
+        let logged_in = r#"<html><body><a href="member.php?action=logout">退出</a></body></html>"#;
+        let logged_out = r#"<html><body><a href="member.php?action=login">登录</a></body></html>"#;
+        let xpath = "//a[contains(@href,'logout') or contains(@href,'action=logout')]";
+        assert!(evaluate_logged_in(logged_in, xpath).unwrap());
+        assert!(!evaluate_logged_in(logged_out, xpath).unwrap());
+    }
+
+    #[test]
+    fn applies_reader_transforms() {
+        use crate::models::ReaderConfig;
+        let html = r#"<div><a href="/thread-1.html">x</a><img src="img/a.png"/><ignore_js_op>junk</ignore_js_op></div>"#;
+        let reader = ReaderConfig {
+            remove_selectors: vec!["//ignore_js_op".to_string()],
+            resolve_relative_urls: true,
+            rewrite_links: true,
+            show_custom_fields: false,
+            layout: None,
+            css: None,
+        };
+        let out = apply_reader_transforms(html, "https://forum.naixi.net/forum-64-1.html", &reader).unwrap();
+        assert!(!out.contains("junk"));
+        assert!(out.contains("https://forum.naixi.net/thread-1.html"));
+        assert!(out.contains("https://forum.naixi.net/img/a.png"));
     }
 
     #[test]
@@ -1624,6 +1815,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let broken = preview_xpath_document("https://example.com/list", &document, &draft)
@@ -1674,6 +1866,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let selected =
@@ -1764,6 +1957,7 @@ mod tests {
             ],
             max_items: Some(20),
             plugin: None,
+            reader: None,
         };
 
         let preview = preview_xpath_document(
@@ -1882,6 +2076,7 @@ mod tests {
             custom_fields: Vec::new(),
             max_items: None,
             plugin: None,
+            reader: None,
         };
 
         let selected = select_best_xpath_selectors_for_preview(
