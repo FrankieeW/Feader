@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::models::{env_reference_name, AiSettings, XPathSelectors};
 use crate::xpath_adapter::is_valid_xpath;
 
-const AI_HTML_CHAR_CAP: usize = 12_000;
+const AI_HTML_CHAR_CAP: usize = 6_000;
 const AI_OUTPUT_TOKEN_CAP: usize = 4096;
 const AI_REQUEST_TIMEOUT_SECONDS: u64 = 45;
 const AI_RESPONSE_SNIPPET_CAP: usize = 320;
@@ -96,6 +96,7 @@ fn build_prompt(html: &str) -> String {
          title/url/summary/publishedAt/author/content/image are relative to each item. nextPage is document-level.\n\
          Keep selectors short and robust. Prefer one stable semantic/tag/class selector over long union expressions.\n\
          Avoid absolute positional paths like /html/body/div[3]/div[2].\n\
+         The entire response must be a complete JSON object that starts with {{ and ends with }}.\n\
          Do not use Markdown. Do not explain. Do not wrap in code fences.\n\n\
          Example output:\n\
          {{\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\"\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
@@ -135,10 +136,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         "model": &settings.model,
         "max_tokens": AI_OUTPUT_TOKEN_CAP,
         "system": "Return only valid JSON for XPath selectors. No prose, no markdown.",
-        "messages": [
-            { "role": "user", "content": prompt },
-            { "role": "assistant", "content": "{" }
-        ],
+        "messages": [{ "role": "user", "content": prompt }],
     });
     let response = ai_http_client()?
         .post(endpoint)
@@ -159,11 +157,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
             response_snippet(&value.to_string())
         )
     })?;
-    if text.trim_start().starts_with('{') {
-        Ok(text)
-    } else {
-        Ok(format!("{{{text}"))
-    }
+    Ok(text)
 }
 
 async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
