@@ -802,6 +802,9 @@ function App() {
       return;
     }
 
+    if (sourceInputMode === "xpath") {
+      setXPathStatus("Confirming XPath source...");
+    }
     await runTask("Adding feed", async () => {
       const source =
         sourceInputMode === "rss"

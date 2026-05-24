@@ -62,7 +62,7 @@ pub async fn fetch_xpath_source(
             Err(error) if first_page => return Err(error),
             Err(_) => break,
         };
-        let normalized = normalize_html(&body);
+        let normalized = normalize_html_document(&body)?;
         let feed = match parse_xpath_source(&current, &normalized, selectors) {
             Ok(feed) => feed,
             Err(error) if first_page => return Err(error),
@@ -89,13 +89,13 @@ pub async fn preview_xpath_source(
     selectors: &XPathSelectors,
 ) -> Result<XPathPreview, String> {
     let body = fetch_page(url).await?;
-    preview_xpath_document(url, &normalize_html(&body), selectors)
+    preview_xpath_document(url, &normalize_html_document(&body)?, selectors)
 }
 
 /// Fetch a URL and return its normalized (real-world-tolerant) XHTML.
 pub async fn fetch_normalized(url: &str) -> Result<String, String> {
     let body = fetch_page(url).await?;
-    Ok(normalize_html(&body))
+    normalize_html_document(&body)
 }
 
 /// True when `expression` compiles as a valid XPath.
@@ -136,7 +136,12 @@ async fn fetch_page(url: &str) -> Result<String, String> {
 fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
     let trimmed = body.trim_start();
     let content_type = content_type.to_ascii_lowercase();
-    if content_type.contains("json") || trimmed.starts_with('{') || trimmed.starts_with('[') {
+    if content_type.contains("json")
+        || trimmed.starts_with('{')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with("for (;;);")
+        || trimmed.starts_with(")]}'")
+    {
         return Err(format!(
             "XPath sources require an HTML/XML page, but this URL returned JSON-like content: {}",
             body_snippet(trimmed)
@@ -150,6 +155,19 @@ fn body_snippet(body: &str) -> String {
         .take(BODY_SNIPPET_CAP)
         .collect::<String>()
         .replace(['\n', '\r', '\t'], " ")
+}
+
+fn normalize_html_document(raw: &str) -> Result<String, String> {
+    reject_non_html_body(raw, "")?;
+    let normalized = normalize_html(raw);
+    let trimmed = normalized.trim_start();
+    if !(trimmed.starts_with('<') || trimmed.starts_with("<?xml")) {
+        return Err(format!(
+            "XPath sources require an HTML/XML page, but normalization produced non-XML content: {}",
+            body_snippet(trimmed)
+        ));
+    }
+    Ok(normalized)
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -923,6 +941,12 @@ mod tests {
     #[test]
     fn rejects_json_like_xpath_source_body() {
         let error = reject_non_html_body("{\"items\":[]}", "application/json").unwrap_err();
+        assert!(error.contains("returned JSON-like content"));
+    }
+
+    #[test]
+    fn rejects_json_like_normalized_document() {
+        let error = normalize_html_document("{\"items\":[]}").unwrap_err();
         assert!(error.contains("returned JSON-like content"));
     }
 }
