@@ -147,6 +147,31 @@ const defaultXPathSelectors: XPathSelectors = {
   nextPage: "",
 };
 
+const xpathPresets: Record<string, XPathSelectors> = {
+  "Generic blog": {
+    items: "//article",
+    title: ".//h2/a | .//h3/a",
+    url: ".//h2/a/@href | .//h3/a/@href",
+    summary: ".//p",
+    publishedAt: ".//time/@datetime",
+    author: "",
+    content: ".//section",
+    image: ".//img/@src",
+    nextPage: "//a[@rel='next']/@href",
+  },
+  "Listing + links": {
+    items: "//li[.//a]",
+    title: ".//a",
+    url: ".//a/@href",
+    summary: "",
+    publishedAt: "",
+    author: "",
+    content: "",
+    image: ".//img/@src",
+    nextPage: "",
+  },
+};
+
 const themeStorageKey = "feader.theme";
 const entryLayoutStorageKey = "feader.entryLayout";
 const paneStorageKey = "feader.paneWidths";
@@ -1956,6 +1981,27 @@ function XPathSourceForm({
   const previewArticles = preview?.articles ?? [];
   return (
     <section className="xpath-form">
+      <label className="selector-input">
+        <span>Preset</span>
+        <select
+          aria-label="Selector preset"
+          disabled={isBusy}
+          onChange={(event) => {
+            const preset = xpathPresets[event.currentTarget.value];
+            if (preset) {
+              onSelectorsChange(preset);
+            }
+          }}
+          value=""
+        >
+          <option value="">Choose a preset…</option>
+          {Object.keys(xpathPresets).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
       <input
         aria-label="XPath source title"
         disabled={isBusy}
@@ -1965,6 +2011,7 @@ function XPathSourceForm({
       />
       <SelectorInput
         disabled={isBusy}
+        hint="Repeating element per article, e.g. //article"
         label="Items"
         name="items"
         onChange={onSelectorsChange}
@@ -1972,6 +2019,7 @@ function XPathSourceForm({
       />
       <SelectorInput
         disabled={isBusy}
+        hint="Text or link inside an item, e.g. .//h2/a"
         label="Title"
         name="title"
         onChange={onSelectorsChange}
@@ -1979,6 +2027,7 @@ function XPathSourceForm({
       />
       <SelectorInput
         disabled={isBusy}
+        hint="Link href inside an item, e.g. .//h2/a/@href"
         label="URL"
         name="url"
         onChange={onSelectorsChange}
@@ -2072,12 +2121,14 @@ function XPathSourceForm({
 
 function SelectorInput({
   disabled,
+  hint,
   label,
   name,
   onChange,
   selectors,
 }: {
   disabled: boolean;
+  hint?: string;
   label: string;
   name: keyof XPathSelectors;
   onChange: (selectors: XPathSelectors) => void;
@@ -2096,6 +2147,7 @@ function SelectorInput({
         }
         value={selectors[name] ?? ""}
       />
+      {hint ? <small className="selector-hint">{hint}</small> : null}
     </label>
   );
 }
