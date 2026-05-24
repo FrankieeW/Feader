@@ -8,6 +8,30 @@ use crate::models::{
     ParsedArticle, ParsedFeed, XPathFieldDiagnostic, XPathPreview, XPathSelectors,
 };
 
+fn normalize_html(raw: &str) -> String {
+    use html5ever::tendril::TendrilSink;
+
+    let dom = html5ever::parse_document(markup5ever_rcdom::RcDom::default(), Default::default())
+        .one(raw);
+    let handle: markup5ever_rcdom::SerializableHandle = dom.document.clone().into();
+
+    let mut buffer = Vec::new();
+    if xml5ever::serialize::serialize(
+        &mut buffer,
+        &handle,
+        xml5ever::serialize::SerializeOpts::default(),
+    )
+    .is_err()
+    {
+        return raw.to_string();
+    }
+
+    let xml = String::from_utf8(buffer).unwrap_or_else(|_| raw.to_string());
+    xml.replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
+        .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
+        .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", "")
+}
+
 /// Fetch a static page and extract articles with XPath selectors.
 pub async fn fetch_xpath_source(
     url: &str,
@@ -25,7 +49,7 @@ pub async fn fetch_xpath_source(
     }
 
     let body = response.text().await.map_err(|error| error.to_string())?;
-    parse_xpath_source(url, &body, selectors)
+    parse_xpath_source(url, &normalize_html(&body), selectors)
 }
 
 /// Fetch a static page and return extracted article samples plus selector diagnostics.
@@ -45,7 +69,7 @@ pub async fn preview_xpath_source(
     }
 
     let body = response.text().await.map_err(|error| error.to_string())?;
-    preview_xpath_document(url, &body, selectors)
+    preview_xpath_document(url, &normalize_html(&body), selectors)
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -510,6 +534,21 @@ mod tests {
             image: Some(".//img/@src".to_string()),
             next_page: None,
         }
+    }
+
+    #[test]
+    fn normalizes_malformed_html_for_extraction() {
+        let messy = r#"<article><h2><a href="/one">First</a></h2><p>Summary one<br>more</article>"#;
+        let feed = parse_xpath_source(
+            "https://example.com/blog/",
+            &normalize_html(messy),
+            &selectors(),
+        )
+        .expect("xpath extracts from normalized html");
+
+        assert_eq!(feed.articles.len(), 1);
+        assert_eq!(feed.articles[0].title, "First");
+        assert_eq!(feed.articles[0].url, "https://example.com/one");
     }
 
     #[test]
