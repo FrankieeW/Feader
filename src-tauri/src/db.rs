@@ -356,6 +356,31 @@ impl AppDatabase {
         get_source_with_connection(&connection, source_id)
     }
 
+    /// Replace the persisted selector configuration for an XPath source.
+    pub fn update_xpath_source_config(
+        &self,
+        source_id: i64,
+        selectors: &XPathSelectors,
+    ) -> Result<Source, String> {
+        let config_json = serde_json::to_string(selectors).map_err(|error| error.to_string())?;
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let updated = connection
+            .execute(
+                "
+                UPDATE sources
+                SET config_json = ?1, last_error = NULL, updated_at = ?2
+                WHERE id = ?3 AND kind = 'xpath'
+                ",
+                params![config_json, now, source_id],
+            )
+            .map_err(|error| error.to_string())?;
+        if updated == 0 {
+            return Err("XPath source not found".to_string());
+        }
+        get_source_with_connection(&connection, source_id)
+    }
+
     /// Set or clear a source's category folder. Blank/whitespace clears it.
     pub fn set_source_category(
         &self,
@@ -990,6 +1015,38 @@ mod tests {
 
         assert!(updated.read);
         assert_eq!(updated.summary.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn xpath_source_config_can_be_updated() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let selectors = XPathSelectors {
+            items: "//article".to_string(),
+            title: ".//h2/a".to_string(),
+            url: ".//h2/a/@href".to_string(),
+            summary: None,
+            published_at: None,
+            author: None,
+            content: None,
+            image: None,
+            next_page: None,
+        };
+        let source = database
+            .add_xpath_source("https://example.com/list", "Example", &selectors)
+            .expect("source inserts");
+
+        let next_selectors = XPathSelectors {
+            title: ".//h3/a".to_string(),
+            url: ".//h3/a/@href".to_string(),
+            ..selectors
+        };
+        let updated = database
+            .update_xpath_source_config(source.id, &next_selectors)
+            .expect("config updates");
+
+        let config = updated.config_json.expect("config is stored");
+        assert!(config.contains(".//h3/a"));
+        assert_eq!(updated.kind, "xpath");
     }
 
     #[test]

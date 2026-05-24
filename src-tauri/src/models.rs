@@ -226,6 +226,14 @@ pub struct AddXPathSourceRequest {
     pub selectors: XPathSelectors,
 }
 
+/// Request body for updating an existing XPath source selector config.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateXPathSourceRequest {
+    pub source_id: i64,
+    pub selectors: XPathSelectors,
+}
+
 /// Request body for renaming a source.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

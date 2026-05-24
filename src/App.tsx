@@ -251,6 +251,20 @@ const testModeSources: Source[] = [
     articleCount: 5,
     unreadCount: 4,
   },
+  {
+    id: 2,
+    kind: "xpath",
+    title: "XPath Demo",
+    url: "https://example.com/articles",
+    category: "Advanced",
+    configJson: JSON.stringify(defaultXPathSelectors),
+    enabled: true,
+    createdAt: "2026-05-23T09:00:00.000Z",
+    lastFetchedAt: "2026-05-23T09:00:00.000Z",
+    lastError: null,
+    articleCount: 0,
+    unreadCount: 0,
+  },
 ];
 
 const testModeArticles: Article[] = [
@@ -591,6 +605,22 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       } as T;
     case "add_xpath_source":
       throw new Error("XPath test mode is read-only. Use the Tauri app to validate XPath sources.");
+    case "update_xpath_source": {
+      const request = args?.request as { sourceId?: number; selectors?: XPathSelectors } | undefined;
+      const sourceId = Number(request?.sourceId);
+      const selectors = compactXPathSelectors(request?.selectors ?? defaultXPathSelectors);
+      testModeSourceState = testModeSourceState.map((source) =>
+        source.id === sourceId && source.kind === "xpath"
+          ? {
+              ...source,
+              configJson: JSON.stringify(selectors),
+              lastFetchedAt: new Date().toISOString(),
+              lastError: null,
+            }
+          : source,
+      );
+      return testModeSourceState.find((source) => source.id === sourceId) as T;
+    }
     case "suggest_xpath_source":
       throw new Error("AI suggestions require the Tauri app.");
     case "set_source_category": {
@@ -702,6 +732,7 @@ function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<number | undefined>();
+  const [selectedManagerSourceId, setSelectedManagerSourceId] = useState<number | undefined>();
   const [selectedArticleId, setSelectedArticleId] = useState<number | undefined>();
   const [readerView, setReaderView] = useState<ReaderView>("none");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
@@ -719,6 +750,11 @@ function App() {
   const [xpathSelectors, setXPathSelectors] = useState<XPathSelectors>(defaultXPathSelectors);
   const [xpathPreview, setXPathPreview] = useState<XPathPreview | null>(null);
   const [xpathStatus, setXPathStatus] = useState<string | null>(null);
+  const [editingXPathSourceId, setEditingXPathSourceId] = useState<number | null>(null);
+  const [editXPathSelectors, setEditXPathSelectors] =
+    useState<XPathSelectors>(defaultXPathSelectors);
+  const [editXPathPreview, setEditXPathPreview] = useState<XPathPreview | null>(null);
+  const [editXPathStatus, setEditXPathStatus] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(defaultAiSettings);
   const [xpathRulePacks, setXPathRulePacks] = useState<XPathRulePack[]>([]);
   const [walletSession, setWalletSession] = useState<WalletSession | null>(null);
@@ -728,6 +764,10 @@ function App() {
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === selectedSourceId),
     [selectedSourceId, sources],
+  );
+  const selectedManagerSource = useMemo(
+    () => sources.find((source) => source.id === selectedManagerSourceId) ?? sources[0],
+    [selectedManagerSourceId, sources],
   );
   const selectedArticle = useMemo(
     () => articles.find((article) => article.id === selectedArticleId) ?? articles[0],
@@ -796,6 +836,16 @@ function App() {
   }, [collapsedGroups]);
 
   const sourceGroups = useMemo(() => groupSourcesByCategory(sources), [sources]);
+
+  useEffect(() => {
+    if (activeView !== "sources") {
+      return;
+    }
+    if (selectedManagerSourceId && sources.some((source) => source.id === selectedManagerSourceId)) {
+      return;
+    }
+    setSelectedManagerSourceId(sources[0]?.id);
+  }, [activeView, selectedManagerSourceId, sources]);
 
   async function loadData(
     sourceId = selectedSourceId,
@@ -922,6 +972,7 @@ function App() {
       setXPathStatus(null);
       setShowSourceComposer(false);
       setSelectedSourceId(source.id);
+      setSelectedManagerSourceId(source.id);
       setFilterMode("all");
       await loadData(source.id, "all", undefined);
       setStatus(`Added ${source.title}`);
@@ -976,6 +1027,47 @@ function App() {
       setStatus(message);
       setXPathStatus(message);
     }, setXPathStatus);
+  }
+
+  function handleStartEditXPathSource(source: Source): void {
+    setEditingXPathSourceId(source.id);
+    setEditXPathSelectors(readXPathSelectorsFromSource(source));
+    setEditXPathPreview(null);
+    setEditXPathStatus(null);
+  }
+
+  async function handlePreviewXPathEdit(source: Source): Promise<void> {
+    setEditXPathStatus("Previewing XPath selectors...");
+    await runTask("Previewing XPath", async () => {
+      const preview = await invoke<XPathPreview>("preview_xpath_source", {
+        request: {
+          url: source.url,
+          selectors: compactXPathSelectors(editXPathSelectors),
+        },
+      });
+      setEditXPathPreview(preview);
+      const message = `Preview extracted ${preview.articles.length} articles`;
+      setStatus(message);
+      setEditXPathStatus(message);
+    }, setEditXPathStatus);
+  }
+
+  async function handleSaveXPathEdit(source: Source): Promise<void> {
+    setEditXPathStatus("Saving XPath selectors...");
+    await runTask("Saving XPath source", async () => {
+      const updated = await invoke<Source>("update_xpath_source", {
+        request: {
+          sourceId: source.id,
+          selectors: compactXPathSelectors(editXPathSelectors),
+        },
+      });
+      setEditingXPathSourceId(null);
+      setEditXPathPreview(null);
+      setEditXPathStatus(null);
+      await loadData(selectedSourceId, filterMode, selectedArticleId);
+      setSelectedManagerSourceId(updated.id);
+      setStatus(`Updated XPath selectors for ${updated.title}`);
+    }, setEditXPathStatus);
   }
 
   async function handleSelectSource(sourceId?: number): Promise<void> {
@@ -1038,6 +1130,12 @@ function App() {
     }
     await runTask("Deleting feed", async () => {
       await invoke("delete_source", { sourceId });
+      if (selectedManagerSourceId === sourceId) {
+        setSelectedManagerSourceId(undefined);
+      }
+      if (editingXPathSourceId === sourceId) {
+        setEditingXPathSourceId(null);
+      }
       if (selectedSourceId === sourceId) {
         setSelectedSourceId(undefined);
         setSelectedArticleId(undefined);
@@ -1312,6 +1410,41 @@ function App() {
             </nav>
           </>
         ) : null}
+
+        {activeView === "sources" ? (
+          <nav className="feed-list source-manager-list" aria-label="Managed sources">
+            {sources.length === 0 ? (
+              <section className="empty-state source-list-empty">
+                <h2>No sources</h2>
+                <p>Add a source to start building the local reader.</p>
+              </section>
+            ) : (
+              sources.map((source) => (
+                <button
+                  className={`feed-item source-manager-item ${
+                    selectedManagerSource?.id === source.id ? "active" : ""
+                  }`}
+                  key={source.id}
+                  onClick={() => setSelectedManagerSourceId(source.id)}
+                  type="button"
+                >
+                  <span className="feed-main">
+                    <span
+                      className={`status-dot ${
+                        source.lastError ? "error" : source.lastFetchedAt ? "healthy" : "muted"
+                      }`}
+                    />
+                    <span className="source-list-copy">
+                      <span className="feed-name">{source.title}</span>
+                      <span>{source.kind.toUpperCase()} · {source.articleCount} articles</span>
+                    </span>
+                  </span>
+                  <small>{source.unreadCount}</small>
+                </button>
+              ))
+            )}
+          </nav>
+        ) : null}
       </aside>
 
       {activeView === "reader" ? (
@@ -1515,71 +1648,38 @@ function App() {
             </section>
           ) : null}
 
-          <div className="source-grid">
-            {sources.length === 0 ? (
-              <section className="empty-state">
-                <h2>No sources</h2>
-                <p>Add a source to start building the local reader.</p>
-              </section>
-            ) : (
-              sources.map((source) => (
-                <article className="source-card" key={source.id}>
-                  <div className="panel-heading">
-                    <span>{source.title}</span>
-                    <span>{sourceHealth(source)}</span>
-                  </div>
-                  <SourceHealthStrip source={source} />
-                  <CategoryPicker
-                    disabled={isBusy}
-                    onSubmit={(id, category) => void handleSetCategory(id, category)}
-                    source={source}
-                  />
-                  <SourceCardManage
-                    disabled={isBusy}
-                    onDelete={(id, title) => void handleDeleteSourceId(id, title)}
-                    onRename={(id, title) => void handleRenameSourceId(id, title)}
-                    source={source}
-                  />
-                  <dl>
-                    <dt>Kind</dt>
-                    <dd>{source.kind}</dd>
-                    <dt>URL</dt>
-                    <dd>{source.url}</dd>
-                    <dt>Enabled</dt>
-                    <dd>{source.enabled ? "Yes" : "No"}</dd>
-                    <dt>Unread</dt>
-                    <dd>{source.unreadCount}</dd>
-                    <dt>Articles</dt>
-                    <dd>{source.articleCount}</dd>
-                    <dt>Last refresh</dt>
-                    <dd>{formatDate(source.lastFetchedAt)}</dd>
-                    <dt>Status</dt>
-                    <dd>{sourceDiagnostic(source)}</dd>
-                  </dl>
-                  {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
-                  <div className="story-actions">
-                    <button
-                      disabled={isBusy}
-                      onClick={() => {
-                        setActiveView("reader");
-                        void handleSelectSource(source.id);
-                      }}
-                      type="button"
-                    >
-                      Select
-                    </button>
-                    <button
-                      disabled={isBusy}
-                      onClick={() => void handleRefreshSource(source.id)}
-                      type="button"
-                    >
-                      Refresh
-                    </button>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
+          {selectedManagerSource ? (
+            <SourceDetailPanel
+              editXPathPreview={editXPathPreview}
+              editXPathSelectors={editXPathSelectors}
+              editXPathStatus={editXPathStatus}
+              editingXPath={editingXPathSourceId === selectedManagerSource.id}
+              isBusy={isBusy}
+              onCancelXPathEdit={() => {
+                setEditingXPathSourceId(null);
+                setEditXPathPreview(null);
+                setEditXPathStatus(null);
+              }}
+              onDelete={(id, title) => void handleDeleteSourceId(id, title)}
+              onOpenInReader={(sourceId) => {
+                setActiveView("reader");
+                void handleSelectSource(sourceId);
+              }}
+              onPreviewXPath={() => void handlePreviewXPathEdit(selectedManagerSource)}
+              onRefresh={(sourceId) => void handleRefreshSource(sourceId)}
+              onRename={(id, title) => void handleRenameSourceId(id, title)}
+              onSaveXPath={() => void handleSaveXPathEdit(selectedManagerSource)}
+              onSetCategory={(id, category) => void handleSetCategory(id, category)}
+              onStartXPathEdit={() => handleStartEditXPathSource(selectedManagerSource)}
+              onXPathSelectorsChange={setEditXPathSelectors}
+              source={selectedManagerSource}
+            />
+          ) : (
+            <section className="empty-state">
+              <h2>No sources</h2>
+              <p>Add a source to start building the local reader.</p>
+            </section>
+          )}
         </section>
       ) : null}
 
@@ -2053,6 +2153,173 @@ function EntryLayoutControl({
   );
 }
 
+function SourceDetailPanel({
+  editXPathPreview,
+  editXPathSelectors,
+  editXPathStatus,
+  editingXPath,
+  isBusy,
+  onCancelXPathEdit,
+  onDelete,
+  onOpenInReader,
+  onPreviewXPath,
+  onRefresh,
+  onRename,
+  onSaveXPath,
+  onSetCategory,
+  onStartXPathEdit,
+  onXPathSelectorsChange,
+  source,
+}: {
+  editXPathPreview: XPathPreview | null;
+  editXPathSelectors: XPathSelectors;
+  editXPathStatus: string | null;
+  editingXPath: boolean;
+  isBusy: boolean;
+  onCancelXPathEdit: () => void;
+  onDelete: (sourceId: number, title: string) => void;
+  onOpenInReader: (sourceId: number) => void;
+  onPreviewXPath: () => void;
+  onRefresh: (sourceId: number) => void;
+  onRename: (sourceId: number, title: string) => void;
+  onSaveXPath: () => void;
+  onSetCategory: (sourceId: number, category: string) => void;
+  onStartXPathEdit: () => void;
+  onXPathSelectorsChange: (selectors: XPathSelectors) => void;
+  source: Source;
+}) {
+  const selectors = source.kind === "xpath" ? readXPathSelectorsFromSource(source) : null;
+
+  return (
+    <article className="source-detail page-panel">
+      <div className="source-detail-header">
+        <div>
+          <p className="eyebrow">{source.kind.toUpperCase()} · {sourceHealth(source)}</p>
+          <h2>{source.title}</h2>
+        </div>
+        <div className="story-actions source-detail-actions">
+          <button disabled={isBusy} onClick={() => onOpenInReader(source.id)} type="button">
+            Open in reader
+          </button>
+          <button disabled={isBusy} onClick={() => onRefresh(source.id)} type="button">
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <SourceHealthStrip source={source} />
+
+      <section className="source-detail-grid">
+        <div className="source-detail-section">
+          <div className="panel-heading">
+            <span>Identity</span>
+            <span>Manage</span>
+          </div>
+          <CategoryPicker disabled={isBusy} onSubmit={onSetCategory} source={source} />
+          <SourceCardManage
+            disabled={isBusy}
+            onDelete={onDelete}
+            onRename={onRename}
+            source={source}
+          />
+        </div>
+
+        <div className="source-detail-section">
+          <div className="panel-heading">
+            <span>Details</span>
+            <span>{sourceDiagnostic(source)}</span>
+          </div>
+          <dl>
+            <dt>Kind</dt>
+            <dd>{source.kind}</dd>
+            <dt>URL</dt>
+            <dd>{source.url}</dd>
+            <dt>Category</dt>
+            <dd>{source.category?.trim() || uncategorizedLabel}</dd>
+            <dt>Enabled</dt>
+            <dd>{source.enabled ? "Yes" : "No"}</dd>
+            <dt>Unread</dt>
+            <dd>{source.unreadCount}</dd>
+            <dt>Articles</dt>
+            <dd>{source.articleCount}</dd>
+            <dt>Last refresh</dt>
+            <dd>{formatDate(source.lastFetchedAt)}</dd>
+          </dl>
+          {source.lastError ? <p className="error-text">{source.lastError}</p> : null}
+        </div>
+      </section>
+
+      {source.kind === "xpath" ? (
+        <section className="xpath-editor-panel">
+          <div className="panel-heading">
+            <span>XPath selectors</span>
+            <span>{editingXPath ? "Editing" : "Static DOM"}</span>
+          </div>
+          {editingXPath ? (
+            <>
+              <XPathSourceForm
+                aiAvailable={false}
+                isBusy={isBusy}
+                onPreview={onPreviewXPath}
+                onSelectorsChange={onXPathSelectorsChange}
+                onSuggest={() => undefined}
+                onTitleChange={() => undefined}
+                preview={editXPathPreview}
+                selectors={editXPathSelectors}
+                showTitle={false}
+                status={editXPathStatus}
+                title={source.title}
+              />
+              <div className="story-actions xpath-edit-actions">
+                <button disabled={isBusy} onClick={onCancelXPathEdit} type="button">
+                  Cancel
+                </button>
+                <button className="primary-action" disabled={isBusy} onClick={onSaveXPath} type="button">
+                  Save selectors
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <XPathSelectorSummary selectors={selectors} />
+              <button disabled={isBusy} onClick={onStartXPathEdit} type="button">
+                Edit XPath selectors
+              </button>
+            </>
+          )}
+        </section>
+      ) : null}
+    </article>
+  );
+}
+
+function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null }) {
+  if (!selectors) {
+    return <p className="error-text">Selector config could not be parsed.</p>;
+  }
+  const rows: [string, string | undefined][] = [
+    ["Items", selectors.items],
+    ["Title", selectors.title],
+    ["URL", selectors.url],
+    ["Summary", selectors.summary],
+    ["Date", selectors.publishedAt],
+    ["Author", selectors.author],
+    ["Content", selectors.content],
+    ["Image", selectors.image],
+    ["Next page", selectors.nextPage],
+  ];
+  return (
+    <dl className="xpath-selector-summary">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value?.trim() || "Unset"}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function CategoryPicker({
   source,
   disabled,
@@ -2404,6 +2671,7 @@ function XPathSourceForm({
   onTitleChange,
   preview,
   selectors,
+  showTitle = true,
   status,
   title,
 }: {
@@ -2415,6 +2683,7 @@ function XPathSourceForm({
   onTitleChange: (title: string) => void;
   preview: XPathPreview | null;
   selectors: XPathSelectors;
+  showTitle?: boolean;
   status: string | null;
   title: string;
 }) {
@@ -2442,13 +2711,15 @@ function XPathSourceForm({
           ))}
         </select>
       </label>
-      <input
-        aria-label="XPath source title"
-        disabled={isBusy}
-        onChange={(event) => onTitleChange(event.currentTarget.value)}
-        placeholder="Source title"
-        value={title}
-      />
+      {showTitle ? (
+        <input
+          aria-label="XPath source title"
+          disabled={isBusy}
+          onChange={(event) => onTitleChange(event.currentTarget.value)}
+          placeholder="Source title"
+          value={title}
+        />
+      ) : null}
       <SelectorInput
         disabled={isBusy}
         hint="Repeating element per article, e.g. //article"
@@ -2624,6 +2895,17 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     image: selectors.image?.trim() || "",
     nextPage: selectors.nextPage?.trim() || "",
   };
+}
+
+function readXPathSelectorsFromSource(source: Source): XPathSelectors {
+  if (!source.configJson) {
+    return defaultXPathSelectors;
+  }
+  try {
+    return normalizeXPathSelectorsForForm(JSON.parse(source.configJson) as XPathSelectors);
+  } catch {
+    return defaultXPathSelectors;
+  }
 }
 
 function emptyToUndefined(value?: string): string | undefined {

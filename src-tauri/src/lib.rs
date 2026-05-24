@@ -15,8 +15,9 @@ use hex::FromHex;
 use models::{
     AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
     CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, Source, SourceRefreshResult,
-    UpdateSourceTitleRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
-    XPathPreview, XPathRulePack, XPathSelectors, XPathSourceSuggestion,
+    UpdateSourceTitleRequest, UpdateXPathSourceRequest, VerifyWalletLoginRequest,
+    WalletLoginChallenge, WalletSession, XPathPreview, XPathRulePack, XPathSelectors,
+    XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use tauri::Manager;
@@ -194,6 +195,27 @@ async fn add_xpath_source(
 
     let source = database.add_xpath_source(url, title, &request.selectors)?;
     database.upsert_articles(source.id, Some(title), &feed.articles)?;
+    database.get_source(source.id)
+}
+
+/// Update an XPath source after validating the new selectors against the same static page.
+#[tauri::command]
+async fn update_xpath_source(
+    request: UpdateXPathSourceRequest,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source, String> {
+    let source = database.get_source(request.source_id)?;
+    if source.kind != "xpath" {
+        return Err("Only XPath sources can update selector config".to_string());
+    }
+
+    let feed = xpath_adapter::fetch_xpath_source(&source.url, &request.selectors).await?;
+    if feed.articles.is_empty() {
+        return Err("XPath selectors did not extract any articles".to_string());
+    }
+
+    let source = database.update_xpath_source_config(source.id, &request.selectors)?;
+    database.upsert_articles(source.id, Some(&source.title), &feed.articles)?;
     database.get_source(source.id)
 }
 
@@ -384,6 +406,7 @@ pub fn run() {
             add_source,
             preview_xpath_source,
             add_xpath_source,
+            update_xpath_source,
             update_source_title,
             set_source_category,
             delete_source,
