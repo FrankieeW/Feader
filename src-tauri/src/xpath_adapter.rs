@@ -1,5 +1,6 @@
 //! Declarative XPath source adapter for static HTML/XML pages.
 
+use sxd_document::dom::{ChildOfElement, Element};
 use sxd_document::parser;
 use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
@@ -102,6 +103,12 @@ pub fn parse_xpath_source(
             continue;
         };
         let url = absolutize_url(base_url, &raw_url)?;
+        let content_html = evaluate_content_html(item, selectors.content.as_deref())?;
+        let content_text = if content_html.is_some() {
+            None
+        } else {
+            evaluate_optional_string(item, selectors.content.as_deref())?
+        };
 
         articles.push(ParsedArticle {
             external_id: Some(url.clone()),
@@ -109,8 +116,8 @@ pub fn parse_xpath_source(
             url,
             canonical_url: None,
             summary: evaluate_optional_string(item, selectors.summary.as_deref())?,
-            content_html: None,
-            content_text: evaluate_optional_string(item, selectors.content.as_deref())?,
+            content_html,
+            content_text,
             author: evaluate_optional_string(item, selectors.author.as_deref())?,
             published_at: evaluate_optional_string(item, selectors.published_at.as_deref())?,
             image_url: evaluate_optional_string(item, selectors.image.as_deref())?
@@ -504,6 +511,68 @@ fn evaluate_optional_string(
     Ok((!text.is_empty()).then_some(text))
 }
 
+fn node_inner_html(element: Element<'_>) -> String {
+    let mut out = String::new();
+    for child in element.children() {
+        serialize_child(child, &mut out);
+    }
+    out
+}
+
+fn serialize_child(child: ChildOfElement<'_>, out: &mut String) {
+    match child {
+        ChildOfElement::Element(element) => {
+            let name = element.name().local_part();
+            out.push('<');
+            out.push_str(name);
+            for attribute in element.attributes() {
+                out.push(' ');
+                out.push_str(attribute.name().local_part());
+                out.push_str("=\"");
+                out.push_str(&escape_html(attribute.value(), true));
+                out.push('"');
+            }
+            out.push('>');
+            for grandchild in element.children() {
+                serialize_child(grandchild, out);
+            }
+            out.push_str("</");
+            out.push_str(name);
+            out.push('>');
+        }
+        ChildOfElement::Text(text) => out.push_str(&escape_html(text.text(), false)),
+        _ => {}
+    }
+}
+
+fn escape_html(value: &str, in_attribute: bool) -> String {
+    let mut escaped = value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    if in_attribute {
+        escaped = escaped.replace('"', "&quot;");
+    }
+    escaped
+}
+
+fn evaluate_content_html(item: Node<'_>, expression: Option<&str>) -> Result<Option<String>, String> {
+    let Some(expression) = expression.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let xpath = compile_xpath(expression)?;
+    let value = xpath
+        .evaluate(&Context::new(), item)
+        .map_err(|error| error.to_string())?;
+    if let Value::Nodeset(nodeset) = value {
+        if let Some(Node::Element(element)) = nodeset.document_order().into_iter().next() {
+            let html = node_inner_html(element);
+            return Ok((!html.trim().is_empty()).then_some(html));
+        }
+    }
+    Ok(None)
+}
+
 fn compile_xpath(expression: &str) -> Result<sxd_xpath::XPath, String> {
     Factory::new()
         .build(expression)
@@ -549,6 +618,30 @@ mod tests {
         assert_eq!(feed.articles.len(), 1);
         assert_eq!(feed.articles[0].title, "First");
         assert_eq!(feed.articles[0].url, "https://example.com/one");
+    }
+
+    #[test]
+    fn content_selector_captures_inner_html() {
+        let mut selectors = selectors();
+        selectors.content = Some(".//section".to_string());
+
+        let feed = parse_xpath_source(
+            "https://example.com/blog/",
+            r#"
+            <html><body>
+              <article>
+                <h2><a href="/one">First</a></h2>
+                <section><strong>Bold</strong> and <em>italic</em></section>
+              </article>
+            </body></html>
+            "#,
+            &selectors,
+        )
+        .expect("xpath extracts");
+
+        let html = feed.articles[0].content_html.as_deref().unwrap_or_default();
+        assert!(html.contains("<strong>"), "expected inner tags, got: {html}");
+        assert!(html.contains("Bold"));
     }
 
     #[test]
