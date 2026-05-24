@@ -99,6 +99,7 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
             image: keep_valid(raw.image),
             next_page: keep_valid(raw.next_page),
             max_items: None,
+            plugin: None,
         },
     })
 }

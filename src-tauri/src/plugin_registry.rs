@@ -326,6 +326,7 @@ fn discuz_rule_pack() -> XPathRulePack {
                 image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
                 next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
                 max_items: Some(20),
+                plugin: None,
             },
         )],
     )
@@ -357,6 +358,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
                     next_page: Some("//a[contains(concat(' ', normalize-space(@class), ' '), ' page-link ') and contains(., '下一')]/@href".to_string()),
                     max_items: None,
+                    plugin: None,
                 },
             ),
             candidate(
@@ -378,6 +380,7 @@ fn maccms_rule_pack() -> XPathRulePack {
                     image: Some(".//a[contains(concat(' ', normalize-space(@class), ' '), ' vodlist_thumb ')]/@data-original".to_string()),
                     next_page: None,
                     max_items: None,
+                    plugin: None,
                 },
             ),
         ],
@@ -409,6 +412,7 @@ fn generic_rule_pack() -> XPathRulePack {
                 image: Some(".//img[@src][1]/@src".to_string()),
                 next_page: Some("//a[@rel='next']/@href | //a[contains(@class, 'next')]/@href".to_string()),
                 max_items: None,
+                plugin: None,
             },
         )],
     )

@@ -1206,6 +1206,18 @@ input:disabled {
   background: #fff;
 }
 
+.source-plugin-section {
+  margin-top: 14px;
+}
+
+.source-plugin-section .hub-author {
+  margin-top: 10px;
+}
+
+.source-plugin-section .hub-card-tags {
+  margin-top: 10px;
+}
+
 /* Meta */
 
 .hub-card-meta {

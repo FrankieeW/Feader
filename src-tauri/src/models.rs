@@ -156,6 +156,25 @@ pub struct XPathSelectors {
     pub next_page: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<XPathSourcePluginInfo>,
+}
+
+/// Plugin metadata copied into a source config when it is created from Hub.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathSourcePluginInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub registry: String,
+    pub trust: String,
+    pub candidate_id: String,
+    pub page_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<PluginAuthor>,
 }
 
 /// AI-suggested XPath source draft.

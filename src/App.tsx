@@ -94,11 +94,24 @@ type XPathSelectors = {
   image?: string;
   nextPage?: string;
   maxItems?: number;
+  plugin?: XPathSourcePluginInfo;
 };
 
 type XPathSourceSuggestion = {
   title?: string | null;
   selectors: XPathSelectors;
+};
+
+type XPathSourcePluginInfo = {
+  id: string;
+  name: string;
+  version: string;
+  registry: string;
+  trust: string;
+  candidateId: string;
+  pageType: string;
+  capabilities: string[];
+  authors?: PluginAuthor[];
 };
 
 type XPathRuleCandidate = {
@@ -217,6 +230,7 @@ const defaultXPathSelectors: XPathSelectors = {
   image: ".//img/@src",
   nextPage: "",
   maxItems: undefined,
+  plugin: undefined,
 };
 
 const xpathPresets: Record<string, XPathSelectors> = {
@@ -233,6 +247,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     image: ".//img/@src",
     nextPage: "//a[@rel='next']/@href",
     maxItems: undefined,
+    plugin: undefined,
   },
   "Listing + links": {
     items: "//li[.//a]",
@@ -247,6 +262,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     image: ".//img/@src",
     nextPage: "",
     maxItems: undefined,
+    plugin: undefined,
   },
 };
 
@@ -442,6 +458,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           image: ".//a[contains(@class, 'kmimg')]//img/@src",
           nextPage: "//a[contains(@class, 'nxt')]/@href",
           maxItems: 20,
+          plugin: undefined,
         },
       },
     ],
@@ -1001,6 +1018,7 @@ function App() {
       ...candidate.selectors,
       cookie: dialogCookie.trim() || undefined,
       maxItems: dialogMaxItems,
+      plugin: pluginSourceInfo(showPluginDialog, candidate),
     };
   }
 
@@ -2658,6 +2676,8 @@ function SourceDetailPanel({
         </div>
       </section>
 
+      {source.kind === "xpath" ? <SourcePluginSummary plugin={selectors?.plugin} /> : null}
+
       {source.kind === "xpath" ? (
         <section className="xpath-editor-panel">
           <div className="panel-heading">
@@ -2732,6 +2752,34 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
   );
 }
 
+function SourcePluginSummary({ plugin }: { plugin?: XPathSourcePluginInfo }) {
+  if (!plugin) return null;
+  return (
+    <section className="source-detail-section source-plugin-section">
+      <div className="panel-heading">
+        <span>Plugin</span>
+        <span>{plugin.trust}</span>
+      </div>
+      <dl>
+        <dt>Name</dt>
+        <dd>{plugin.name}</dd>
+        <dt>Version</dt>
+        <dd>v{plugin.version}</dd>
+        <dt>Rule</dt>
+        <dd>{plugin.pageType}</dd>
+        <dt>Registry</dt>
+        <dd>{plugin.registry}</dd>
+      </dl>
+      <PluginAuthorDetails authors={plugin.authors} />
+      <div className="hub-card-tags">
+        {plugin.capabilities.map((cap) => (
+          <span className="hub-tag" key={cap}>{cap}</span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string {
   const sectionName = section?.path[section.path.length - 1]?.trim();
   if (!sectionName) {
@@ -2743,8 +2791,26 @@ function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string
   return `${pack.name} · ${sectionName}`;
 }
 
+function pluginSourceInfo(pack: XPathRulePack, candidate: XPathRuleCandidate): XPathSourcePluginInfo {
+  return {
+    id: pack.id,
+    name: pack.name,
+    version: pack.version,
+    registry: pack.registry,
+    trust: pack.trust,
+    candidateId: candidate.id,
+    pageType: candidate.pageType,
+    capabilities: pack.capabilities,
+    authors: pack.authors,
+  };
+}
+
 function PluginAuthorPanel({ pack }: { pack: XPathRulePack }) {
-  const author = pack.authors?.[0];
+  return <PluginAuthorDetails authors={pack.authors} />;
+}
+
+function PluginAuthorDetails({ authors }: { authors?: PluginAuthor[] }) {
+  const author = authors?.[0];
   if (!author) return null;
   const profileUrl = author.website || (author.githubId ? `https://github.com/${author.githubId}` : undefined);
   return (
@@ -3361,6 +3427,8 @@ function SelectorInput({
   onChange: (selectors: XPathSelectors) => void;
   selectors: XPathSelectors;
 }) {
+  const rawValue = selectors[name];
+  const value = typeof rawValue === "string" || typeof rawValue === "number" ? rawValue : "";
   return (
     <label className="selector-input">
       <span>{label}</span>
@@ -3372,7 +3440,7 @@ function SelectorInput({
             [name]: event.currentTarget.value,
           })
         }
-        value={selectors[name] ?? ""}
+        value={value}
       />
       {hint ? <small className="selector-hint">{hint}</small> : null}
     </label>
@@ -3393,6 +3461,7 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     image: emptyToUndefined(selectors.image),
     nextPage: emptyToUndefined(selectors.nextPage),
     maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
+    plugin: selectors.plugin,
   };
 }
 
@@ -3410,6 +3479,7 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     image: selectors.image?.trim() || "",
     nextPage: selectors.nextPage?.trim() || "",
     maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
+    plugin: selectors.plugin,
   };
 }
 

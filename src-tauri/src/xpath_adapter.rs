@@ -1162,6 +1162,7 @@ mod tests {
             image: Some(".//img/@src".to_string()),
             next_page: None,
             max_items: None,
+            plugin: None,
         }
     }
 
@@ -1433,6 +1434,7 @@ mod tests {
             image: Some(".//img/@src".to_string()),
             next_page: None,
             max_items: None,
+            plugin: None,
         };
 
         let broken = preview_xpath_document("https://example.com/list", &document, &draft)
@@ -1480,6 +1482,7 @@ mod tests {
             image: None,
             next_page: None,
             max_items: None,
+            plugin: None,
         };
 
         let selected =
@@ -1548,6 +1551,7 @@ mod tests {
             image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
             next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
             max_items: Some(20),
+            plugin: None,
         };
 
         let preview = preview_xpath_document(
@@ -1653,6 +1657,7 @@ mod tests {
             image: None,
             next_page: None,
             max_items: None,
+            plugin: None,
         };
 
         let selected = select_best_xpath_selectors_for_preview(

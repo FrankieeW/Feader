@@ -1082,6 +1082,7 @@ mod tests {
             image: None,
             next_page: None,
             max_items: None,
+            plugin: None,
         };
         let source = database
             .add_xpath_source("https://example.com/list", "Example", &selectors)
