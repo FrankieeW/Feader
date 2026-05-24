@@ -92,6 +92,7 @@ type XPathSelectors = {
   detailContent?: string;
   image?: string;
   nextPage?: string;
+  maxItems?: number;
 };
 
 type XPathSourceSuggestion = {
@@ -203,6 +204,7 @@ const defaultXPathSelectors: XPathSelectors = {
   detailContent: "",
   image: ".//img/@src",
   nextPage: "",
+  maxItems: undefined,
 };
 
 const xpathPresets: Record<string, XPathSelectors> = {
@@ -217,6 +219,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     detailContent: "",
     image: ".//img/@src",
     nextPage: "//a[@rel='next']/@href",
+    maxItems: undefined,
   },
   "Listing + links": {
     items: "//li[.//a]",
@@ -229,6 +232,7 @@ const xpathPresets: Record<string, XPathSelectors> = {
     detailContent: "",
     image: ".//img/@src",
     nextPage: "",
+    maxItems: undefined,
   },
 };
 
@@ -412,6 +416,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
           detailContent: "//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]",
           image: ".//a[contains(@class, 'kmimg')]//img/@src",
           nextPage: "//a[contains(@class, 'nxt')]/@href",
+          maxItems: 20,
         },
       },
     ],
@@ -425,6 +430,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
         { id: "forum-65-2", path: ["板块", "内容区", "技术", "编程"], url: "https://forum.naixi.net/forum-65-2.html" },
         { id: "forum-62-1", path: ["板块", "站务区", "公告"], url: "https://forum.naixi.net/forum-62-1.html" },
       ],
+      defaults: { maxItems: 20 },
     },
   },
 ];
@@ -761,6 +767,7 @@ function App() {
   const [dialogTitle, setDialogTitle] = useState("");
   const [dialogSectionId, setDialogSectionId] = useState("");
   const [dialogCandidateId, setDialogCandidateId] = useState("");
+  const [dialogMaxItems, setDialogMaxItems] = useState<number | undefined>();
   const [dialogPreview, setDialogPreview] = useState<XPathPreview | null>(null);
   const [dialogStatus, setDialogStatus] = useState<string | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
@@ -945,6 +952,7 @@ function App() {
     setDialogSectionId(firstSection?.id ?? "");
     setDialogTitle(pluginSourceTitle(pack, firstSection));
     setDialogCandidateId(firstCandidate?.id ?? "");
+    setDialogMaxItems(firstCandidate?.selectors.maxItems ?? pack.parameters?.defaults?.maxItems);
     setDialogPreview(null);
     setDialogStatus(null);
     setShowPluginDialog(pack);
@@ -962,7 +970,10 @@ function App() {
       showPluginDialog.candidates.find((item) => item.id === dialogCandidateId) ??
       showPluginDialog.candidates[0];
     if (!candidate) return null;
-    return candidate.selectors;
+    return {
+      ...candidate.selectors,
+      maxItems: dialogMaxItems,
+    };
   }
 
   async function handleDialogPreview(): Promise<void> {
@@ -2029,7 +2040,12 @@ function App() {
                     aria-label="Plugin rule"
                     disabled={isDialogBusy}
                     onChange={(e) => {
-                      setDialogCandidateId(e.currentTarget.value);
+                      const candidateId = e.currentTarget.value;
+                      const candidate = showPluginDialog.candidates.find((item) => item.id === candidateId);
+                      setDialogCandidateId(candidateId);
+                      setDialogMaxItems(
+                        candidate?.selectors.maxItems ?? showPluginDialog.parameters?.defaults?.maxItems,
+                      );
                       setDialogPreview(null);
                     }}
                     value={dialogCandidateId}
@@ -2052,6 +2068,19 @@ function App() {
                   placeholder="Source title"
                   type="text"
                   value={dialogTitle}
+                />
+              </label>
+
+              <label className="dialog-field">
+                <span>Max items per refresh</span>
+                <input
+                  aria-label="Max items per refresh"
+                  disabled={isDialogBusy}
+                  min="1"
+                  onChange={(e) => setDialogMaxItems(parseOptionalPositiveInt(e.currentTarget.value))}
+                  placeholder="No limit"
+                  type="number"
+                  value={dialogMaxItems ?? ""}
                 />
               </label>
 
@@ -2637,6 +2666,7 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
     ["Detail content", selectors.detailContent],
     ["Image", selectors.image],
     ["Next page", selectors.nextPage],
+    ["Max items", selectors.maxItems ? String(selectors.maxItems) : undefined],
   ];
   return (
     <dl className="xpath-selector-summary">
@@ -3123,6 +3153,22 @@ function XPathSourceForm({
           onChange={onSelectorsChange}
           selectors={selectors}
         />
+        <label className="selector-input">
+          <span>Max items per refresh</span>
+          <input
+            disabled={isBusy}
+            min="1"
+            onChange={(event) =>
+              onSelectorsChange({
+                ...selectors,
+                maxItems: parseOptionalPositiveInt(event.currentTarget.value),
+              })
+            }
+            placeholder="No limit"
+            type="number"
+            value={selectors.maxItems ?? ""}
+          />
+        </label>
         <SelectorInput
           disabled={isBusy}
           label="Image"
@@ -3230,6 +3276,7 @@ function compactXPathSelectors(selectors: XPathSelectors): XPathSelectors {
     detailContent: emptyToUndefined(selectors.detailContent),
     image: emptyToUndefined(selectors.image),
     nextPage: emptyToUndefined(selectors.nextPage),
+    maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
   };
 }
 
@@ -3245,6 +3292,7 @@ function normalizeXPathSelectorsForForm(selectors: XPathSelectors): XPathSelecto
     detailContent: selectors.detailContent?.trim() || "",
     image: selectors.image?.trim() || "",
     nextPage: selectors.nextPage?.trim() || "",
+    maxItems: normalizeOptionalPositiveInt(selectors.maxItems),
   };
 }
 
@@ -3262,6 +3310,18 @@ function readXPathSelectorsFromSource(source: Source): XPathSelectors {
 function emptyToUndefined(value?: string): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseOptionalPositiveInt(value: string): number | undefined {
+  return normalizeOptionalPositiveInt(Number(value));
+}
+
+function normalizeOptionalPositiveInt(value?: number): number | undefined {
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(Number(value));
+  return normalized > 0 ? normalized : undefined;
 }
 
 function resolveSelectedArticleId(

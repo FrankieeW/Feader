@@ -147,8 +147,12 @@ pub async fn fetch_xpath_source(
     let mut current = url.to_string();
     let mut articles = Vec::new();
     let mut first_page = true;
+    let max_items = max_items_limit(selectors);
 
     for _ in 0..MAX_XPATH_PAGES {
+        if articles.len() >= max_items {
+            break;
+        }
         if !visited.insert(current.clone()) {
             break;
         }
@@ -167,7 +171,10 @@ pub async fn fetch_xpath_source(
             Err(error) if first_page => return Err(error),
             Err(_) => break,
         };
-        articles.extend(enrich_articles_with_detail_content(feed.articles, selectors).await?);
+        let remaining = max_items.saturating_sub(articles.len());
+        let mut page_articles = feed.articles;
+        page_articles.truncate(remaining);
+        articles.extend(enrich_articles_with_detail_content(page_articles, selectors).await?);
         first_page = false;
 
         match next_page_url(&current, &normalized, selectors) {
@@ -312,7 +319,7 @@ pub fn parse_xpath_source(
     };
 
     let mut articles = Vec::new();
-    for item in items {
+    for item in items.into_iter().take(max_items_limit(selectors)) {
         let Some(title) = evaluate_required_string(item, &selectors.title)? else {
             continue;
         };
@@ -422,6 +429,13 @@ fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
     evaluate_content_html(Node::Root(package.as_document().root()), Some(selector))
+}
+
+fn max_items_limit(selectors: &XPathSelectors) -> usize {
+    selectors
+        .max_items
+        .filter(|value| *value > 0)
+        .unwrap_or(usize::MAX)
 }
 
 /// Preview a static HTML/XML document string with field-level selector diagnostics.
@@ -543,7 +557,8 @@ pub fn preview_xpath_document(
         });
     }
 
-    for item in items.into_iter().take(5) {
+    let preview_limit = max_items_limit(selectors).min(5);
+    for item in items.into_iter().take(preview_limit) {
         let Some(title) = evaluate_required_string(item, &selectors.title)? else {
             continue;
         };
@@ -1083,6 +1098,7 @@ mod tests {
             detail_content: None,
             image: Some(".//img/@src".to_string()),
             next_page: None,
+            max_items: None,
         }
     }
 
@@ -1352,6 +1368,7 @@ mod tests {
             detail_content: None,
             image: Some(".//img/@src".to_string()),
             next_page: None,
+            max_items: None,
         };
 
         let broken = preview_xpath_document("https://example.com/list", &document, &draft)
@@ -1397,6 +1414,7 @@ mod tests {
             detail_content: None,
             image: None,
             next_page: None,
+            max_items: None,
         };
 
         let selected =
@@ -1463,6 +1481,7 @@ mod tests {
             detail_content: Some("//*[@id='postlist']//td[contains(@class, 't_f') and starts-with(@id, 'postmessage_')][1]".to_string()),
             image: Some(".//a[contains(@class, 'kmimg')]//img/@src".to_string()),
             next_page: Some("//a[contains(@class, 'nxt')]/@href".to_string()),
+            max_items: Some(20),
         };
 
         let preview = preview_xpath_document(
@@ -1483,6 +1502,15 @@ mod tests {
             preview.next_page_url.as_deref(),
             Some("https://forum.naixi.net/forum-64-2.html")
         );
+        let mut limited_selectors = selectors.clone();
+        limited_selectors.max_items = Some(1);
+        let limited_preview = preview_xpath_document(
+            "https://forum.naixi.net/forum-64-1.html",
+            &document,
+            &limited_selectors,
+        )
+        .expect("previews limited naixi selectors");
+        assert_eq!(limited_preview.articles.len(), 1);
 
         let detail_document = normalize_html_document(
             r#"
@@ -1541,6 +1569,7 @@ mod tests {
             detail_content: None,
             image: None,
             next_page: None,
+            max_items: None,
         };
 
         let selected = select_best_xpath_selectors_for_preview(

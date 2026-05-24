@@ -152,6 +152,8 @@ pub struct XPathSelectors {
     pub detail_content: Option<String>,
     pub image: Option<String>,
     pub next_page: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<usize>,
 }
 
 /// AI-suggested XPath source draft.
