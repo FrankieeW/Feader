@@ -144,10 +144,12 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         return Err(format!("AI request failed with status {}", response.status()));
     }
     let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
-    let text = value["content"][0]["text"]
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| "Unexpected Anthropic response shape".to_string())?;
+    let text = extract_model_text(&value).ok_or_else(|| {
+        format!(
+            "Unexpected Anthropic response shape. Response started with: {}",
+            response_snippet(&value.to_string())
+        )
+    })?;
     if text.trim_start().starts_with('{') {
         Ok(text)
     } else {
@@ -198,10 +200,12 @@ async fn send_openai_request(
         return Err(format!("AI request failed with status {}", response.status()));
     }
     let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
-    value["choices"][0]["message"]["content"]
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| "Unexpected OpenAI response shape".to_string())
+    extract_model_text(&value).ok_or_else(|| {
+        format!(
+            "Unexpected OpenAI response shape. Response started with: {}",
+            response_snippet(&value.to_string())
+        )
+    })
 }
 
 fn ai_http_client() -> Result<reqwest::Client, String> {
@@ -222,6 +226,31 @@ fn response_snippet(text: &str) -> String {
     } else {
         snippet.replace(['\n', '\r', '\t'], " ")
     }
+}
+
+fn extract_model_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value["choices"][0]["message"]["content"].as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(text) = value["choices"][0]["text"].as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(text) = value["content"].as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(text) = value["completion"].as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(text) = value["output_text"].as_str() {
+        return Some(text.to_string());
+    }
+    let blocks = value["content"].as_array()?;
+    let text = blocks
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(test)]
@@ -247,6 +276,32 @@ mod tests {
     fn reports_non_json_model_response_snippet() {
         let error = parse_selectors_json("I cannot inspect this page.").unwrap_err();
         assert!(error.contains("I cannot inspect this page."));
+    }
+
+    #[test]
+    fn extracts_text_from_common_provider_shapes() {
+        let anthropic = serde_json::json!({
+            "content": [{ "type": "text", "text": "{\"items\":\"//article\"}" }]
+        });
+        let openai = serde_json::json!({
+            "choices": [{ "message": { "content": "{\"items\":\"//article\"}" } }]
+        });
+        let completion = serde_json::json!({
+            "completion": "{\"items\":\"//article\"}"
+        });
+
+        assert_eq!(
+            extract_model_text(&anthropic).as_deref(),
+            Some("{\"items\":\"//article\"}")
+        );
+        assert_eq!(
+            extract_model_text(&openai).as_deref(),
+            Some("{\"items\":\"//article\"}")
+        );
+        assert_eq!(
+            extract_model_text(&completion).as_deref(),
+            Some("{\"items\":\"//article\"}")
+        );
     }
 
     #[test]
