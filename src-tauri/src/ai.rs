@@ -141,7 +141,7 @@ pub async fn suggest_xpath_selectors(
 }
 
 async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
-    let endpoint = configured_endpoint(&settings.base_url);
+    let endpoint = configured_endpoint(&settings.base_url, "anthropic");
     let body = serde_json::json!({
         "model": &settings.model,
         "max_tokens": AI_OUTPUT_TOKEN_CAP,
@@ -171,7 +171,7 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
 }
 
 async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
-    let endpoint = configured_endpoint(&settings.base_url);
+    let endpoint = configured_endpoint(&settings.base_url, "openai");
     let json_body = serde_json::json!({
         "model": &settings.model,
         "max_tokens": AI_OUTPUT_TOKEN_CAP,
@@ -230,8 +230,20 @@ fn ai_http_client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-fn configured_endpoint(value: &str) -> String {
-    value.trim().trim_end_matches('/').to_string()
+fn configured_endpoint(value: &str, provider: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if is_complete_endpoint(trimmed) {
+        return trimmed.to_string();
+    }
+    match provider {
+        "anthropic" => format!("{trimmed}/v1/messages"),
+        "openai" => format!("{trimmed}/chat/completions"),
+        _ => trimmed.to_string(),
+    }
+}
+
+fn is_complete_endpoint(value: &str) -> bool {
+    value.ends_with("/chat/completions") || value.ends_with("/v1/messages")
 }
 
 fn response_snippet(text: &str) -> String {
@@ -331,10 +343,26 @@ mod tests {
     }
 
     #[test]
-    fn uses_configured_endpoint_without_appending_path() {
+    fn expands_provider_base_urls_to_default_endpoints() {
         assert_eq!(
-            configured_endpoint("https://api.example.com/custom/messages/"),
-            "https://api.example.com/custom/messages"
+            configured_endpoint("https://api.example.com/anthropic/", "anthropic"),
+            "https://api.example.com/anthropic/v1/messages"
+        );
+        assert_eq!(
+            configured_endpoint("https://api.example.com/v1", "openai"),
+            "https://api.example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn preserves_complete_configured_endpoints() {
+        assert_eq!(
+            configured_endpoint("https://api.example.com/custom/v1/messages/", "anthropic"),
+            "https://api.example.com/custom/v1/messages"
+        );
+        assert_eq!(
+            configured_endpoint("https://api.example.com/v1/chat/completions", "openai"),
+            "https://api.example.com/v1/chat/completions"
         );
     }
 

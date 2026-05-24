@@ -1788,17 +1788,20 @@ function AiSettingsCard({
           </select>
         </label>
         <label className="selector-input">
-          <span>Endpoint URL</span>
+          <span>Request URL</span>
           <input
             disabled={disabled}
             onChange={(event) => setBaseUrl(event.currentTarget.value)}
             placeholder={
               provider === "anthropic"
-                ? "https://api.anthropic.com/v1/messages"
-                : "https://api.openai.com/v1/chat/completions"
+                ? "https://api.anthropic.com"
+                : "https://api.openai.com/v1"
             }
             value={baseUrl}
           />
+          <small className="selector-hint">
+            Enter a provider base URL or a complete API URL.
+          </small>
         </label>
         <label className="selector-input">
           <span>Model</span>
