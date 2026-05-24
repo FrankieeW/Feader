@@ -90,6 +90,53 @@ pub struct WalletSession {
     pub expires_at: Option<String>,
 }
 
+/// AI provider configuration exposed to the renderer (never carries a literal secret).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettings {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub enabled: bool,
+    pub api_key_set: bool,
+    pub api_key_reference: Option<String>,
+    pub updated_at: String,
+}
+
+/// AI settings input from the renderer.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettingsInput {
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub enabled: bool,
+    pub api_key: Option<String>,
+}
+
+/// Return the variable name if `value` is an env reference like `$NAME` or `${NAME}`.
+pub fn env_reference_name(value: &str) -> Option<String> {
+    let rest = value.trim().strip_prefix('$')?;
+    let name = match rest.strip_prefix('{') {
+        Some(inner) => inner.strip_suffix('}')?,
+        None => rest,
+    };
+    let mut chars = name.chars();
+    let first_ok = chars
+        .next()
+        .is_some_and(|c| c == '_' || c.is_ascii_alphabetic());
+    if first_ok && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// True when `value` is an env reference (`$NAME` / `${NAME}`).
+pub fn is_env_reference(value: &str) -> bool {
+    env_reference_name(value).is_some()
+}
+
 /// XPath selectors for a static HTML/XML source.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

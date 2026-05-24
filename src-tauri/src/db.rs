@@ -4,11 +4,11 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use chrono::{Duration, Utc};
-use rusqlite::{params, Connection, ToSql};
+use rusqlite::{params, Connection, OptionalExtension, ToSql};
 
 use crate::models::{
-    Article, ArticleFilter, ParsedArticle, Source, WalletLoginChallenge, WalletSession,
-    XPathSelectors,
+    AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, Source,
+    WalletLoginChallenge, WalletSession, XPathSelectors,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -224,6 +224,70 @@ impl AppDatabase {
             )
             .map_err(|error| error.to_string())?;
         Ok(())
+    }
+
+    /// Read AI settings with the API key masked (literal hidden, env reference shown).
+    pub fn get_ai_settings(&self) -> Result<AiSettings, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        read_ai_settings(&connection)
+    }
+
+    /// Return the raw stored API key string (literal or `$NAME` reference) for backend use only.
+    pub fn raw_ai_api_key(&self) -> Result<String, String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        let key = connection
+            .query_row("SELECT api_key FROM ai_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        Ok(key)
+    }
+
+    /// Upsert AI settings; a blank `api_key` keeps the existing stored key.
+    pub fn set_ai_settings(&self, input: &AiSettingsInput) -> Result<AiSettings, String> {
+        let now = now_string();
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+
+        let existing_key = connection
+            .query_row("SELECT api_key FROM ai_settings WHERE id = 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        let new_key = match input.api_key.as_deref().map(str::trim) {
+            Some(key) if !key.is_empty() => key.to_string(),
+            _ => existing_key,
+        };
+        let enabled = if input.enabled { 1 } else { 0 };
+
+        connection
+            .execute(
+                "
+                INSERT INTO ai_settings (id, provider, base_url, model, api_key, enabled, updated_at)
+                VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(id) DO UPDATE SET
+                    provider = excluded.provider,
+                    base_url = excluded.base_url,
+                    model = excluded.model,
+                    api_key = excluded.api_key,
+                    enabled = excluded.enabled,
+                    updated_at = excluded.updated_at
+                ",
+                params![
+                    &input.provider,
+                    &input.base_url,
+                    &input.model,
+                    &new_key,
+                    enabled,
+                    &now
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+
+        read_ai_settings(&connection)
     }
 
     fn add_source_with_kind(
@@ -627,6 +691,16 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             revoked_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS ai_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            provider TEXT NOT NULL DEFAULT 'openai',
+            base_url TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            api_key TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_articles_source_id ON articles(source_id);
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at);
         CREATE INDEX IF NOT EXISTS idx_wallet_login_challenges_expires_at
@@ -729,6 +803,51 @@ fn get_source_with_connection(connection: &Connection, source_id: i64) -> Result
         .ok_or_else(|| format!("Source {source_id} was not found"))
 }
 
+fn read_ai_settings(connection: &Connection) -> Result<AiSettings, String> {
+    let row = connection
+        .query_row(
+            "SELECT provider, base_url, model, api_key, enabled, updated_at FROM ai_settings WHERE id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+
+    let Some((provider, base_url, model, api_key, enabled, updated_at)) = row else {
+        return Ok(AiSettings {
+            provider: "openai".to_string(),
+            base_url: String::new(),
+            model: String::new(),
+            enabled: false,
+            api_key_set: false,
+            api_key_reference: None,
+            updated_at: String::new(),
+        });
+    };
+
+    let api_key_set = !api_key.trim().is_empty();
+    let api_key_reference = crate::models::is_env_reference(&api_key).then(|| api_key.clone());
+
+    Ok(AiSettings {
+        provider,
+        base_url,
+        model,
+        enabled,
+        api_key_set,
+        api_key_reference,
+        updated_at,
+    })
+}
+
 fn article_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     Ok(Article {
         id: row.get(0)?,
@@ -786,6 +905,46 @@ mod tests {
             .add_source("https://example.com/feed.xml", Some("Example"))
             .expect("source inserts");
         assert_eq!(source.category, None);
+    }
+
+    #[test]
+    fn ai_settings_round_trip_and_key_masking() {
+        let database = AppDatabase::in_memory().expect("database opens");
+
+        let saved = database
+            .set_ai_settings(&crate::models::AiSettingsInput {
+                provider: "openai".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                enabled: true,
+                api_key: Some("sk-secret".to_string()),
+            })
+            .expect("saves");
+        assert!(saved.api_key_set);
+        assert_eq!(saved.api_key_reference, None);
+
+        let kept = database
+            .set_ai_settings(&crate::models::AiSettingsInput {
+                provider: "openai".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                enabled: true,
+                api_key: None,
+            })
+            .expect("saves");
+        assert!(kept.api_key_set);
+        assert_eq!(database.raw_ai_api_key().expect("raw key"), "sk-secret");
+
+        let referenced = database
+            .set_ai_settings(&crate::models::AiSettingsInput {
+                provider: "anthropic".to_string(),
+                base_url: "https://api.anthropic.com".to_string(),
+                model: "claude-haiku-4-5-20251001".to_string(),
+                enabled: true,
+                api_key: Some("$MY_KEY".to_string()),
+            })
+            .expect("saves");
+        assert_eq!(referenced.api_key_reference.as_deref(), Some("$MY_KEY"));
     }
 
     #[test]
