@@ -230,6 +230,8 @@ pub struct XPathRulePack {
     pub registry: String,
     pub trust: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
     pub capabilities: Vec<String>,
     pub candidates: Vec<XPathRuleCandidate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -316,6 +318,8 @@ pub struct RemotePluginManifest {
     pub kind: String,
     pub feader_api_version: String,
     pub description: Option<String>,
+    #[serde(default)]
+    pub logo: Option<String>,
     pub entry: String,
     #[serde(default)]
     pub authors: Vec<PluginAuthor>,

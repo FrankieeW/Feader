@@ -139,6 +139,7 @@ pub async fn fetch_remote_plugin_pack(
             .description
             .or(manifest.description)
             .unwrap_or_default(),
+        logo: manifest.logo,
         capabilities: vec!["xpath.selectorCandidates".to_string()],
         candidates: pack.candidates,
         authors: manifest.authors,
@@ -273,6 +274,7 @@ fn rule_pack(
         registry: OFFICIAL_REGISTRY.to_string(),
         trust: "bundled-official".to_string(),
         description: description.to_string(),
+        logo: None,
         capabilities: vec![
             "xpath.selectorCandidates".to_string(),
             "ai.promptRules".to_string(),

@@ -168,6 +168,7 @@ type XPathRulePack = {
   registry: string;
   trust: string;
   description: string;
+  logo?: string | null;
   capabilities: string[];
   candidates: XPathRuleCandidate[];
   authors?: PluginAuthor[];
@@ -460,6 +461,7 @@ const testModeXPathRulePacks: XPathRulePack[] = [
     registry: "https://github.com/FrankieeW/FeaderHub",
     trust: "official",
     description: "Static XPath rules for naixi.net forum thread lists with section-based browsing.",
+    logo: "https://s.naixi.net/favicon.ico",
     capabilities: ["xpath.selectorCandidates"],
     authors: [
       {
@@ -1632,20 +1634,31 @@ function App() {
                     {collapsed
                       ? null
                       : group.sources.map((source) => (
-                          <button
-                            className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
-                            key={source.id}
-                            onClick={() => void handleSelectSource(source.id)}
-                            type="button"
-                          >
-                            <span className="feed-main">
-                              <span
-                                className={`status-dot ${source.lastError ? "error" : source.unreadCount > 0 ? "healthy" : "muted"}`}
-                              />
-                              <span className="feed-name">{source.title}</span>
-                            </span>
-                            <small>{source.unreadCount}</small>
-                          </button>
+                          <div className="feed-row" key={source.id}>
+                            <button
+                              className={`feed-item ${selectedSourceId === source.id ? "active" : ""}`}
+                              onClick={() => void handleSelectSource(source.id)}
+                              type="button"
+                            >
+                              <span className="feed-main">
+                                <span
+                                  className={`status-dot ${source.lastError ? "error" : source.unreadCount > 0 ? "healthy" : "muted"}`}
+                                />
+                                <span className="feed-name">{source.title}</span>
+                              </span>
+                              <small>{source.unreadCount}</small>
+                            </button>
+                            <button
+                              aria-label={`Delete ${source.title}`}
+                              className="feed-delete"
+                              disabled={isBusy}
+                              onClick={() => void handleDeleteSourceId(source.id, source.title)}
+                              title="Delete feed"
+                              type="button"
+                            >
+                              ×
+                            </button>
+                          </div>
                         ))}
                   </div>
                 );
@@ -1663,27 +1676,38 @@ function App() {
               </section>
             ) : (
               sources.map((source) => (
-                <button
-                  className={`feed-item source-manager-item ${
-                    selectedManagerSource?.id === source.id ? "active" : ""
-                  }`}
-                  key={source.id}
-                  onClick={() => setSelectedManagerSourceId(source.id)}
-                  type="button"
-                >
-                  <span className="feed-main">
-                    <span
-                      className={`status-dot ${
-                        source.lastError ? "error" : source.lastFetchedAt ? "healthy" : "muted"
-                      }`}
-                    />
-                    <span className="source-list-copy">
-                      <span className="feed-name">{source.title}</span>
-                      <span>{source.kind.toUpperCase()} · {source.articleCount} articles</span>
+                <div className="feed-row" key={source.id}>
+                  <button
+                    className={`feed-item source-manager-item ${
+                      selectedManagerSource?.id === source.id ? "active" : ""
+                    }`}
+                    onClick={() => setSelectedManagerSourceId(source.id)}
+                    type="button"
+                  >
+                    <span className="feed-main">
+                      <span
+                        className={`status-dot ${
+                          source.lastError ? "error" : source.lastFetchedAt ? "healthy" : "muted"
+                        }`}
+                      />
+                      <span className="source-list-copy">
+                        <span className="feed-name">{source.title}</span>
+                        <span>{source.kind.toUpperCase()} · {source.articleCount} articles</span>
+                      </span>
                     </span>
-                  </span>
-                  <small>{source.unreadCount}</small>
-                </button>
+                    <small>{source.unreadCount}</small>
+                  </button>
+                  <button
+                    aria-label={`Delete ${source.title}`}
+                    className="feed-delete"
+                    disabled={isBusy}
+                    onClick={() => void handleDeleteSourceId(source.id, source.title)}
+                    title="Delete feed"
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </div>
               ))
             )}
           </nav>
@@ -1985,9 +2009,7 @@ function App() {
               <div className="hub-featured-grid">
                 {officialPacks.slice(0, 3).map((pack) => (
                   <article className="hub-card hub-card-featured" key={pack.id}>
-                    <div className="hub-card-icon">
-                      {pack.name.charAt(0).toUpperCase()}
-                    </div>
+                    <HubCardIcon className="hub-card-icon" pack={pack} />
                     <div className="hub-card-body">
                       <div className="hub-card-header">
                         <span className="hub-card-name">{pack.name}</span>
@@ -2037,9 +2059,7 @@ function App() {
               <div className="hub-grid">
                 {filteredPacks.map((pack) => (
                   <article className="hub-card" key={pack.id}>
-                    <div className="hub-card-icon hub-card-icon-sm">
-                      {pack.name.charAt(0).toUpperCase()}
-                    </div>
+                    <HubCardIcon className="hub-card-icon hub-card-icon-sm" pack={pack} />
                     <div className="hub-card-body">
                       <div className="hub-card-header">
                         <span className="hub-card-name">{pack.name}</span>
@@ -2796,6 +2816,17 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
   );
 }
 
+function HubCardIcon({ pack, className }: { pack: XPathRulePack; className: string }) {
+  if (pack.logo) {
+    return (
+      <div className={className}>
+        <img alt="" className="hub-card-logo" src={pack.logo} />
+      </div>
+    );
+  }
+  return <div className={className}>{pack.name.charAt(0).toUpperCase()}</div>;
+}
+
 function SourcePluginSummary({ plugin }: { plugin?: XPathSourcePluginInfo }) {
   if (!plugin) return null;
   return (
@@ -2855,8 +2886,14 @@ function PluginAuthorPanel({ pack }: { pack: XPathRulePack }) {
 
 function PluginAuthorDetails({ authors }: { authors?: PluginAuthor[] }) {
   const author = authors?.[0];
+  const [openPanel, setOpenPanel] = useState<"more" | "donate" | null>(null);
   if (!author) return null;
   const profileUrl = author.website || (author.githubId ? `https://github.com/${author.githubId}` : undefined);
+  const githubUrl = author.githubId ? `https://github.com/${author.githubId}` : undefined;
+  const hasMore = Boolean(author.email || author.website || author.githubId);
+  const togglePanel = (panel: "more" | "donate") =>
+    setOpenPanel((current) => (current === panel ? null : panel));
+  const closePanel = () => setOpenPanel(null);
   return (
     <div className="hub-author">
       {author.avatarUrl ? <img alt="" className="hub-author-avatar" src={author.avatarUrl} /> : null}
@@ -2871,22 +2908,91 @@ function PluginAuthorDetails({ authors }: { authors?: PluginAuthor[] }) {
           )}
           {author.githubId ? <span>@{author.githubId}</span> : null}
         </div>
-        <div className="hub-author-links">
-          {author.email ? <a href={`mailto:${author.email}`}>Email</a> : null}
+        <div className="hub-author-actions">
+          {hasMore ? (
+            <button
+              className="hub-author-action"
+              onClick={() => togglePanel("more")}
+              type="button"
+            >
+              {openPanel === "more" ? "Hide" : "See more"}
+            </button>
+          ) : null}
           {author.evmAddress ? (
-            <a href={evmDonateUri(author.evmAddress)} rel="noreferrer" target="_blank">
-              Donate
-            </a>
+            <button
+              className="hub-author-action"
+              onClick={() => togglePanel("donate")}
+              type="button"
+            >
+              {openPanel === "donate" ? "Hide" : "Donate"}
+            </button>
           ) : null}
         </div>
       </div>
-      {author.evmAddress ? (
-        <img
-          alt="EVM donation QR"
-          className="hub-donate-qr"
-          src={qrImageUrl(evmDonateUri(author.evmAddress))}
-          title={author.evmAddress}
-        />
+      {openPanel === "more" ? (
+        <div className="hub-author-popover">
+          <button
+            aria-label="Close"
+            className="hub-author-popover-close"
+            onClick={closePanel}
+            type="button"
+          >
+            ×
+          </button>
+          <dl className="hub-author-detail-list">
+            {author.email ? (
+              <>
+                <dt>Email</dt>
+                <dd>
+                  <a href={`mailto:${author.email}`}>{author.email}</a>
+                </dd>
+              </>
+            ) : null}
+            {author.website ? (
+              <>
+                <dt>Website</dt>
+                <dd>
+                  <a href={author.website} rel="noreferrer" target="_blank">
+                    {author.website}
+                  </a>
+                </dd>
+              </>
+            ) : null}
+            {githubUrl ? (
+              <>
+                <dt>GitHub</dt>
+                <dd>
+                  <a href={githubUrl} rel="noreferrer" target="_blank">
+                    @{author.githubId}
+                  </a>
+                </dd>
+              </>
+            ) : null}
+          </dl>
+        </div>
+      ) : null}
+      {openPanel === "donate" && author.evmAddress ? (
+        <div className="hub-author-popover">
+          <button
+            aria-label="Close"
+            className="hub-author-popover-close"
+            onClick={closePanel}
+            type="button"
+          >
+            ×
+          </button>
+          <div className="hub-donate-detail">
+            <img
+              alt="EVM donation QR"
+              className="hub-donate-qr"
+              src={qrImageUrl(evmDonateUri(author.evmAddress))}
+            />
+            <code className="hub-donate-address">{author.evmAddress}</code>
+            <a href={evmDonateUri(author.evmAddress)} rel="noreferrer" target="_blank">
+              Open in wallet
+            </a>
+          </div>
+        </div>
       ) : null}
     </div>
   );
