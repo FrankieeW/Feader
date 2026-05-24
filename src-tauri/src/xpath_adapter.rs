@@ -34,11 +34,11 @@ fn normalize_html(raw: &str) -> String {
     }
 
     let xml = String::from_utf8(buffer).unwrap_or_else(|_| raw.to_string());
-    strip_leading_doctype(
-        &xml.replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
-            .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
-            .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", ""),
-    )
+    let without_namespaces = xml
+        .replace(" xmlns=\"http://www.w3.org/1999/xhtml\"", "")
+        .replace(" xmlns=\"http://www.w3.org/2000/svg\"", "")
+        .replace(" xmlns=\"http://www.w3.org/1998/Math/MathML\"", "");
+    escape_invalid_xml_ampersands(&strip_leading_doctype(&without_namespaces))
 }
 
 fn strip_leading_doctype(value: &str) -> String {
@@ -53,6 +53,54 @@ fn strip_leading_doctype(value: &str) -> String {
         return value.to_string();
     };
     trimmed[end + 1..].trim_start().to_string()
+}
+
+fn escape_invalid_xml_ampersands(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < value.len() {
+        if bytes[index] == b'&' && !starts_valid_xml_entity(&value[index + 1..]) {
+            escaped.push_str("&amp;");
+            index += 1;
+            continue;
+        }
+        let ch = value[index..]
+            .chars()
+            .next()
+            .expect("index is on a UTF-8 boundary");
+        escaped.push(ch);
+        index += ch.len_utf8();
+    }
+    escaped
+}
+
+fn starts_valid_xml_entity(value: &str) -> bool {
+    value.starts_with("amp;")
+        || value.starts_with("lt;")
+        || value.starts_with("gt;")
+        || value.starts_with("quot;")
+        || value.starts_with("apos;")
+        || starts_numeric_xml_entity(value)
+}
+
+fn starts_numeric_xml_entity(value: &str) -> bool {
+    if let Some(rest) = value
+        .strip_prefix("#x")
+        .or_else(|| value.strip_prefix("#X"))
+    {
+        let Some(end) = rest.find(';') else {
+            return false;
+        };
+        return end > 0 && rest[..end].chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+    if let Some(rest) = value.strip_prefix('#') {
+        let Some(end) = rest.find(';') else {
+            return false;
+        };
+        return end > 0 && rest[..end].chars().all(|ch| ch.is_ascii_digit());
+    }
+    false
 }
 
 /// Fetch a static page and extract articles with XPath selectors.
@@ -196,10 +244,13 @@ fn normalize_html_document(raw: &str) -> Result<String, String> {
 
 pub fn looks_like_interstitial_document(document: &str) -> bool {
     let lower = document.to_ascii_lowercase();
-    lower.contains("just a moment")
-        || lower.contains("cf_chl")
-        || lower.contains("challenge-platform")
-        || lower.contains("enable javascript and cookies to continue")
+    let has_challenge_marker = lower.contains("cf_chl") || lower.contains("challenge-platform");
+    let browser_check_title = lower.contains("<title>just a moment")
+        || lower.contains("<title>attention required")
+        || lower.contains("enable javascript and cookies to continue");
+    let cloudflare_interstitial = lower.contains("just a moment") && has_challenge_marker;
+
+    browser_check_title || cloudflare_interstitial
 }
 
 /// Extract articles from a static HTML/XML document string.
@@ -1006,6 +1057,20 @@ mod tests {
     }
 
     #[test]
+    fn escapes_bare_ampersands_for_xml_xpath_parse() {
+        let html = r#"<html><body><article><h2><a href="/one?genre=a&secure=b">First & second</a></h2></article></body></html>"#;
+        let normalized = normalize_html_document(html).expect("normalizes");
+        assert!(normalized.contains("genre=a&amp;secure=b"));
+
+        let feed = parse_xpath_source("https://example.com/blog/", &normalized, &selectors())
+            .expect("xpath extracts after escaping ampersands");
+        assert_eq!(
+            feed.articles[0].url,
+            "https://example.com/one?genre=a&secure=b"
+        );
+    }
+
+    #[test]
     fn content_selector_captures_inner_html() {
         let mut selectors = selectors();
         selectors.content = Some(".//section".to_string());
@@ -1351,5 +1416,17 @@ mod tests {
             normalize_html_document("<html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={}</script></body></html>")
                 .unwrap_err();
         assert!(error.contains("anti-bot"));
+    }
+
+    #[test]
+    fn allows_content_pages_with_cloudflare_footer_scripts() {
+        let normalized = normalize_html_document(
+            r#"<html><head><title>Real page</title></head><body><article><h2><a href="/one">First</a></h2></article><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>"#,
+        )
+        .expect("normal content pages may include Cloudflare scripts");
+
+        let feed = parse_xpath_source("https://example.com/", &normalized, &selectors())
+            .expect("xpath extracts from real content page");
+        assert_eq!(feed.articles.len(), 1);
     }
 }
