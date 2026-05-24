@@ -152,6 +152,14 @@ pub struct XPathSelectors {
     pub next_page: Option<String>,
 }
 
+/// AI-suggested XPath source draft.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XPathSourceSuggestion {
+    pub title: Option<String>,
+    pub selectors: XPathSelectors,
+}
+
 /// Preview diagnostics for a single XPath selector field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

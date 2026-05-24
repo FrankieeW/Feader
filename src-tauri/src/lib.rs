@@ -15,7 +15,7 @@ use models::{
     AddSourceRequest, AddXPathSourceRequest, AiSettings, AiSettingsInput, Article, ArticleFilter,
     CreateWalletLoginChallengeRequest, PreviewXPathSourceRequest, Source, SourceRefreshResult,
     UpdateSourceTitleRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
-    XPathPreview, XPathSelectors,
+    XPathPreview, XPathSelectors, XPathSourceSuggestion,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use tauri::Manager;
@@ -106,7 +106,7 @@ fn set_ai_settings(
 async fn suggest_xpath_source(
     url: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathSelectors, String> {
+) -> Result<XPathSourceSuggestion, String> {
     let url = url.trim();
     if url.is_empty() {
         return Err("XPath source URL is required".to_string());

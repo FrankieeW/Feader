@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::models::{env_reference_name, AiSettings, XPathSelectors};
+use crate::models::{env_reference_name, AiSettings, XPathSelectors, XPathSourceSuggestion};
 use crate::xpath_adapter::is_valid_xpath;
 
 const AI_HTML_CHAR_CAP: usize = 6_000;
@@ -26,6 +26,8 @@ pub fn resolve_api_key(stored: &str) -> Result<String, String> {
 
 #[derive(Deserialize)]
 struct SuggestedSelectors {
+    #[serde(rename = "sourceTitle")]
+    source_title: Option<String>,
     items: Option<String>,
     title: Option<String>,
     url: Option<String>,
@@ -52,7 +54,7 @@ fn keep_valid(value: Option<String>) -> Option<String> {
 }
 
 /// Parse a model response (possibly wrapped in prose/code fences) into validated selectors.
-pub fn parse_selectors_json(text: &str) -> Result<XPathSelectors, String> {
+pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String> {
     let json = extract_json_object(text).ok_or_else(|| {
         if text.trim_start().starts_with('{') {
             return format!(
@@ -74,16 +76,22 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSelectors, String> {
         return Err("AI did not return usable selectors".to_string());
     }
 
-    Ok(XPathSelectors {
-        items,
-        title,
-        url,
-        summary: keep_valid(raw.summary),
-        published_at: keep_valid(raw.published_at),
-        author: keep_valid(raw.author),
-        content: keep_valid(raw.content),
-        image: keep_valid(raw.image),
-        next_page: keep_valid(raw.next_page),
+    Ok(XPathSourceSuggestion {
+        title: raw
+            .source_title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        selectors: XPathSelectors {
+            items,
+            title,
+            url,
+            summary: keep_valid(raw.summary),
+            published_at: keep_valid(raw.published_at),
+            author: keep_valid(raw.author),
+            content: keep_valid(raw.content),
+            image: keep_valid(raw.image),
+            next_page: keep_valid(raw.next_page),
+        },
     })
 }
 
@@ -91,15 +99,17 @@ fn build_prompt(html: &str) -> String {
     format!(
         "Generate XPath selectors for an article-listing page from the normalized XHTML below.\n\
          You must return exactly one JSON object and nothing else.\n\
-         Required string keys: items, title, url, summary, publishedAt, author, content, image, nextPage.\n\
+         Required string keys: sourceTitle, items, title, url, summary, publishedAt, author, content, image, nextPage.\n\
+         sourceTitle is a concise human-readable source name inferred from the page, not an XPath.\n\
          Values must be XPath expressions or an empty string. `items` selects each repeating article node.\n\
          title/url/summary/publishedAt/author/content/image are relative to each item. nextPage is document-level.\n\
+         Fill every selector field you can infer with reasonable confidence, especially summary, date, author, content, image, and nextPage.\n\
          Keep selectors short and robust. Prefer one stable semantic/tag/class selector over long union expressions.\n\
          Avoid absolute positional paths like /html/body/div[3]/div[2].\n\
          The entire response must be a complete JSON object that starts with {{ and ends with }}.\n\
          Do not use Markdown. Do not explain. Do not wrap in code fences.\n\n\
          Example output:\n\
-         {{\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\"\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
+         {{\"sourceTitle\":\"Example Blog\",\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\".//p\",\"publishedAt\":\".//time/@datetime\",\"author\":\".//*[contains(@class,'author')]\",\"content\":\".\",\"image\":\".//img/@src\",\"nextPage\":\"//a[@rel='next']/@href\"}}\n\n\
          Normalized XHTML:\n{html}"
     )
 }
@@ -109,7 +119,7 @@ pub async fn suggest_xpath_selectors(
     settings: &AiSettings,
     stored_api_key: &str,
     page_html: &str,
-) -> Result<XPathSelectors, String> {
+) -> Result<XPathSourceSuggestion, String> {
     let base_url = settings.base_url.trim();
     if base_url.is_empty() {
         return Err("AI base URL is not configured".to_string());
@@ -264,11 +274,12 @@ mod tests {
 
     #[test]
     fn parses_selectors_from_model_text() {
-        let text = "Sure:\n```json\n{\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\"\",\"content\":\".//section\",\"image\":\".//img/@src\",\"author\":null,\"publishedAt\":\".//time/@datetime\",\"nextPage\":\"\"}\n```";
-        let selectors = parse_selectors_json(text).expect("parses");
-        assert_eq!(selectors.items, "//article");
-        assert_eq!(selectors.content.as_deref(), Some(".//section"));
-        assert_eq!(selectors.summary, None);
+        let text = "Sure:\n```json\n{\"sourceTitle\":\"Example Blog\",\"items\":\"//article\",\"title\":\".//h2/a\",\"url\":\".//h2/a/@href\",\"summary\":\"\",\"content\":\".//section\",\"image\":\".//img/@src\",\"author\":null,\"publishedAt\":\".//time/@datetime\",\"nextPage\":\"\"}\n```";
+        let suggestion = parse_selectors_json(text).expect("parses");
+        assert_eq!(suggestion.title.as_deref(), Some("Example Blog"));
+        assert_eq!(suggestion.selectors.items, "//article");
+        assert_eq!(suggestion.selectors.content.as_deref(), Some(".//section"));
+        assert_eq!(suggestion.selectors.summary, None);
     }
 
     #[test]

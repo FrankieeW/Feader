@@ -93,6 +93,11 @@ type XPathSelectors = {
   nextPage?: string;
 };
 
+type XPathSourceSuggestion = {
+  title?: string | null;
+  selectors: XPathSelectors;
+};
+
 type ParsedArticle = {
   title: string;
   url: string;
@@ -855,11 +860,16 @@ function App() {
 
     setXPathStatus("Suggesting selectors with AI...");
     await runTask("Suggesting selectors", async () => {
-      const suggested = await invoke<XPathSelectors>("suggest_xpath_source", { url });
-      const nextSelectors = normalizeXPathSelectorsForForm(suggested);
+      const suggested = await invoke<XPathSourceSuggestion>("suggest_xpath_source", { url });
+      const nextSelectors = normalizeXPathSelectorsForForm(suggested.selectors);
+      const suggestedTitle = suggested.title?.trim();
+      if (suggestedTitle) {
+        setXPathTitle(suggestedTitle);
+      }
       setXPathSelectors(nextSelectors);
       setXPathPreview(null);
-      const message = `AI suggested selectors. Items: ${nextSelectors.items}; Title: ${nextSelectors.title}; URL: ${nextSelectors.url}. Run Preview to validate.`;
+      const titleSummary = suggestedTitle ? `Source title: ${suggestedTitle}; ` : "";
+      const message = `AI suggested ${titleSummary}Items: ${nextSelectors.items}; Title: ${nextSelectors.title}; URL: ${nextSelectors.url}. Run Preview to validate.`;
       setStatus(message);
       setXPathStatus(message);
     }, setXPathStatus);
