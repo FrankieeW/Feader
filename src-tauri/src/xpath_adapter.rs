@@ -394,45 +394,54 @@ pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) 
 
 /// True when `logged_in_xpath` matches at least one node in `document`.
 ///
-/// Falls back to a text-based heuristic when the document HTML is too messy for
-/// strict XML parsing (e.g. unclosed non-void elements on large forum pages).
+/// Tries three strategies in order:
+/// 1. Full HTML normalize → XML parse → XPath evaluation (precise).
+/// 2. Text-based keyword extraction from the XPath expression.
+/// 3. Generic logout-link detection as a last resort.
 pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool, String> {
-    let normalized = normalize_html_document(document)?;
-    let package = match parser::parse(&normalized) {
-        Ok(pkg) => pkg,
-        Err(_) => return evaluate_logged_in_by_text(document, logged_in_xpath),
-    };
-    let root = Node::Root(package.as_document().root());
-    let xpath = compile_xpath(logged_in_xpath)?;
-    let context = Context::new();
-    match xpath.evaluate(&context, root).map_err(|error| error.to_string())? {
-        Value::Nodeset(nodes) => Ok(!nodes.document_order().is_empty()),
-        Value::Boolean(value) => Ok(value),
-        Value::String(value) => Ok(!value.is_empty()),
-        Value::Number(value) => Ok(value != 0.0),
+    // Strategy 1: full normalize → parse → XPath.
+    if let Ok(normalized) = normalize_html_document(document) {
+        if let Ok(package) = parser::parse(&normalized) {
+            let root = Node::Root(package.as_document().root());
+            if let Ok(xpath) = compile_xpath(logged_in_xpath) {
+                if let Ok(value) = xpath.evaluate(&Context::new(), root) {
+                    return match value {
+                        Value::Nodeset(nodes) => Ok(!nodes.document_order().is_empty()),
+                        Value::Boolean(v) => Ok(v),
+                        Value::String(v) => Ok(!v.is_empty()),
+                        Value::Number(v) => Ok(v != 0.0),
+                    };
+                }
+            }
+        }
     }
+    // Strategy 2: extract XPath terms and substring-match the raw document.
+    if let Ok(terms) = extract_xpath_terms(logged_in_xpath) {
+        if !terms.is_empty() {
+            let lower = document.to_ascii_lowercase();
+            return Ok(terms.iter().any(|t| lower.contains(&t.to_ascii_lowercase())));
+        }
+    }
+    // Strategy 3: generic logout-link detection.
+    let lower = document.to_ascii_lowercase();
+    let has_logout_link = lower.contains("action=logout")
+        || lower.contains("logout")
+        || lower.contains("action=logout")
+        || lower.contains("sign out")
+        || lower.contains("退出");
+    Ok(has_logout_link)
 }
 
-/// Best-effort text match when the document can't be parsed as strict XML.
-fn evaluate_logged_in_by_text(document: &str, xpath: &str) -> Result<bool, String> {
-    // Extract all single-quoted string literals from the XPath expression.
-    let terms: Vec<&str> = Regex::new("'([^']+)'")
-        .map_err(|e| e.to_string())?
+/// Extract single-quoted string literals with ≥ 3 characters from an XPath expression.
+fn extract_xpath_terms(xpath: &str) -> Result<Vec<String>, String> {
+    let re = Regex::new("'([^']+)'").map_err(|e| e.to_string())?;
+    let terms: Vec<String> = re
         .captures_iter(xpath)
         .filter_map(|cap| cap.get(1))
-        .map(|m| m.as_str())
-        .filter(|s| s.len() >= 3) // ignore short substrings like class fragments
+        .map(|m| m.as_str().to_string())
+        .filter(|s| s.len() >= 3)
         .collect();
-    if terms.is_empty() {
-        return Err("无法解析该页面的 HTML 结构,也无法从 XPath 中提取搜索关键词".to_string());
-    }
-    let lower = document.to_ascii_lowercase();
-    // Check whether the document contains an <a> tag with any of the terms in its href.
-    let found = terms.iter().any(|term| {
-        let lower_term = term.to_ascii_lowercase();
-        lower.contains(&lower_term)
-    });
-    Ok(found)
+    Ok(terms)
 }
 
 /// Fetch `check_url` with the given cookie and report whether the login marker is present.
