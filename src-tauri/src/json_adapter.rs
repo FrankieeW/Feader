@@ -45,7 +45,7 @@ pub async fn fetch_json_feed(
     let mut items: Vec<Value> = Vec::new();
     let mut current_url = url.to_string();
 
-    for _page in 0..MAX_JSON_PAGES {
+    for _ in 0..MAX_JSON_PAGES {
         let body = fetch_json_with_cookie(&current_url, cookie).await?;
         let root: Value =
             serde_json::from_str(&body).map_err(|e| format!("Failed to parse JSON: {e}"))?;
