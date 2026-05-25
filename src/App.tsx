@@ -78,6 +78,7 @@ type ReaderView = "none" | "preview" | "immersive";
 type AppUiPluginId = string;
 type AppUiThemeByMode = { light: AppUiPluginId | null; dark: AppUiPluginId | null };
 type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
+type HubInstallFilter = "all" | "installed" | "not-installed";
 type DetailViewPluginId = "magazine" | "focus" | "research" | "cinema";
 type PaneKey = "sidebar" | "timeline";
 type ReaderVideo =
@@ -1444,6 +1445,7 @@ function App() {
   const [pluginInstallUrl, setPluginInstallUrl] = useState("");
   const [pluginTemplateStatus, setPluginTemplateStatus] = useState<string | null>(null);
   const [hubSearchQuery, setHubSearchQuery] = useState("");
+  const [hubInstallFilter, setHubInstallFilter] = useState<HubInstallFilter>("all");
   const [hubGroup, setHubGroup] = useState<"all" | "sources" | "appearance">("all");
   const [hubCategory, setHubCategory] = useState("all");
   const [showPluginDialog, setShowPluginDialog] = useState<XPathRulePack | null>(null);
@@ -1643,6 +1645,11 @@ function App() {
           : sourcePackFamilies(pack).has(hubCategory);
         if (!matchesCat) return false;
       }
+      const packInstalled = isViewPluginPack(pack)
+        ? installedViewPlugins.includes(viewPluginIdFromPack(pack))
+        : pack.installed;
+      if (hubInstallFilter === "installed" && !packInstalled) return false;
+      if (hubInstallFilter === "not-installed" && packInstalled) return false;
       if (!query) return true;
       return (
         pack.name.toLowerCase().includes(query) ||
@@ -1651,7 +1658,7 @@ function App() {
         pack.capabilities.some((cap) => cap.toLowerCase().includes(query))
       );
     });
-  }, [xpathRulePacks, hubSearchQuery, hubGroup, hubCategory]);
+  }, [xpathRulePacks, hubSearchQuery, hubGroup, hubCategory, hubInstallFilter, installedViewPlugins]);
 
   const officialPacks = useMemo(
     () => filteredPacks.filter((p) => p.trust === "bundled-official" || p.trust === "official"),
@@ -3081,6 +3088,18 @@ function App() {
               value={hubSearchQuery}
             />
           </div>
+
+          <nav className="hub-categories" aria-label="Install status">
+            {(["all", "installed", "not-installed"] as const).map((filter) => (
+              <button
+                className={`hub-category-chip ${hubInstallFilter === filter ? "active" : ""}`}
+                key={filter}
+                onClick={() => setHubInstallFilter(filter)}
+              >
+                {filter === "all" ? "All" : filter === "installed" ? "Installed" : "Not Installed"}
+              </button>
+            ))}
+          </nav>
 
           <nav className="hub-categories" aria-label="Plugin type">
             {hubGroups.map((group) => (
