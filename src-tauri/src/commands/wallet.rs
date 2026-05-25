@@ -4,6 +4,7 @@ use hex::FromHex;
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{
     CreateWalletLoginChallengeRequest, VerifyWalletLoginRequest, WalletLoginChallenge,
     WalletSession,
@@ -14,16 +15,20 @@ use crate::models::{
 pub fn create_wallet_login_challenge(
     request: CreateWalletLoginChallengeRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<WalletLoginChallenge, String> {
-    database.create_wallet_login_challenge(&request.domain, &request.uri, &generate_nonce())
+) -> Result<WalletLoginChallenge> {
+    Ok(database.create_wallet_login_challenge(
+        &request.domain,
+        &request.uri,
+        &generate_nonce(),
+    )?)
 }
 
 /// Return the current verified wallet session.
 #[tauri::command]
 pub fn get_wallet_session(
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Option<WalletSession>, String> {
-    database.current_wallet_session()
+) -> Result<Option<WalletSession>> {
+    Ok(database.current_wallet_session()?)
 }
 
 /// Verify a signed SIWE login message and persist the local wallet session.
@@ -31,7 +36,7 @@ pub fn get_wallet_session(
 pub async fn verify_wallet_login(
     request: VerifyWalletLoginRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<WalletSession, String> {
+) -> Result<WalletSession> {
     let message: Message = request
         .message
         .parse()
@@ -55,28 +60,28 @@ pub async fn verify_wallet_login(
     )?;
 
     let address = eip55(&message.address);
-    database.save_wallet_session(
+    Ok(database.save_wallet_session(
         &address,
         message.chain_id,
         &request.message,
         &request.signature,
-    )
+    )?)
 }
 
 /// Revoke the current local wallet session.
 #[tauri::command]
-pub fn disconnect_wallet_login(database: tauri::State<'_, AppDatabase>) -> Result<(), String> {
-    database.disconnect_wallet_session()
+pub fn disconnect_wallet_login(database: tauri::State<'_, AppDatabase>) -> Result<()> {
+    Ok(database.disconnect_wallet_session()?)
 }
 
-fn decode_signature(signature: &str) -> Result<Vec<u8>, String> {
+fn decode_signature(signature: &str) -> Result<Vec<u8>> {
     let signature = signature
         .trim()
         .strip_prefix("0x")
         .unwrap_or(signature.trim());
     let bytes = Vec::from_hex(signature).map_err(|error| error.to_string())?;
     if bytes.len() != 65 {
-        return Err("Wallet signature must be 65 bytes".to_string());
+        return Err("Wallet signature must be 65 bytes".into());
     }
     Ok(bytes)
 }

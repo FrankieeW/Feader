@@ -1,6 +1,7 @@
 //! Article read/save/list commands.
 
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{Article, ArticleFilter};
 
 /// Return articles matching optional filters.
@@ -8,8 +9,8 @@ use crate::models::{Article, ArticleFilter};
 pub fn list_articles(
     filter: Option<ArticleFilter>,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<Article>, String> {
-    database.list_articles(filter.unwrap_or_default())
+) -> Result<Vec<Article>> {
+    Ok(database.list_articles(filter.unwrap_or_default())?)
 }
 
 /// Set the read state for an article.
@@ -18,8 +19,8 @@ pub fn mark_article_read(
     article_id: i64,
     read: bool,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<(), String> {
-    database.mark_article_read(article_id, read)
+) -> Result<()> {
+    Ok(database.mark_article_read(article_id, read)?)
 }
 
 /// Set the saved state for an article.
@@ -28,8 +29,8 @@ pub fn save_article(
     article_id: i64,
     saved: bool,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<(), String> {
-    database.save_article(article_id, saved)
+) -> Result<()> {
+    Ok(database.save_article(article_id, saved)?)
 }
 
 /// Set read state on every article, optionally scoped to one source.
@@ -38,6 +39,6 @@ pub fn mark_articles_read(
     source_id: Option<i64>,
     read: bool,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<usize, String> {
-    database.mark_articles_read(source_id, read)
+) -> Result<usize> {
+    Ok(database.mark_articles_read(source_id, read)?)
 }

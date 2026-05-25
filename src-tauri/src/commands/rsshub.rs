@@ -6,6 +6,7 @@ use crate::db::AppDatabase;
 use crate::models::{
     AddRssHubInstanceRequest, RssHubInstance, RssHubInstanceCheck, RssHubSettings,
 };
+use crate::error::{FeaderError, Result};
 
 const RSSHUB_SETTINGS_KEY: &str = "rsshub_settings";
 const RSSHUB_DEFAULT_INSTANCE_ID: &str = "rsshub-rssforever";
@@ -87,7 +88,7 @@ fn builtin_rsshub_instances() -> Vec<RssHubInstance> {
     ]
 }
 
-fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings, String> {
+fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings> {
     let mut settings = database
         .get_setting(RSSHUB_SETTINGS_KEY)?
         .and_then(|json| serde_json::from_str::<RssHubSettings>(&json).ok())
@@ -116,29 +117,29 @@ fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings, String
     Ok(settings)
 }
 
-fn save_rsshub_settings(database: &AppDatabase, settings: &RssHubSettings) -> Result<(), String> {
-    let json = serde_json::to_string(settings).map_err(|error| error.to_string())?;
-    database.set_setting(RSSHUB_SETTINGS_KEY, &json)
+fn save_rsshub_settings(database: &AppDatabase, settings: &RssHubSettings) -> Result<()> {
+    let json = serde_json::to_string(settings)?;
+    Ok(database.set_setting(RSSHUB_SETTINGS_KEY, &json)?)
 }
 
-fn normalize_rsshub_base_url(base_url: &str) -> Result<String, String> {
+fn normalize_rsshub_base_url(base_url: &str) -> Result<String> {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err("RSSHub instance URL is required".to_string());
+        return Err("RSSHub instance URL is required".into());
     }
     if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
-        return Err("RSSHub instance URL must start with http:// or https://".to_string());
+        return Err("RSSHub instance URL must start with http:// or https://".into());
     }
     Ok(trimmed.to_string())
 }
 
-pub(crate) fn normalize_rsshub_route(route: &str) -> Result<String, String> {
+pub(crate) fn normalize_rsshub_route(route: &str) -> Result<String> {
     let trimmed = route.trim();
     if trimmed.is_empty() {
-        return Err("RSSHub route is required".to_string());
+        return Err("RSSHub route is required".into());
     }
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        let parsed = url::Url::parse(trimmed).map_err(|error| error.to_string())?;
+        let parsed = url::Url::parse(trimmed).map_err(|e| FeaderError::Message(e.to_string()))?;
         let mut route = parsed.path().to_string();
         if let Some(query) = parsed.query() {
             route.push('?');
@@ -168,7 +169,7 @@ fn rsshub_instance_id_from_base(base_url: &str) -> String {
         .to_string()
 }
 
-pub(crate) fn build_rsshub_url(instance: &RssHubInstance, route: &str) -> Result<String, String> {
+pub(crate) fn build_rsshub_url(instance: &RssHubInstance, route: &str) -> Result<String> {
     Ok(format!(
         "{}{}",
         normalize_rsshub_base_url(&instance.base_url)?,
@@ -179,7 +180,7 @@ pub(crate) fn build_rsshub_url(instance: &RssHubInstance, route: &str) -> Result
 pub(crate) fn resolve_rsshub_instance(
     database: &AppDatabase,
     instance_id: Option<&str>,
-) -> Result<RssHubInstance, String> {
+) -> Result<RssHubInstance> {
     let settings = load_rsshub_settings(database)?;
     let selected_id = instance_id
         .filter(|value| !value.trim().is_empty())
@@ -188,14 +189,14 @@ pub(crate) fn resolve_rsshub_instance(
         .instances
         .into_iter()
         .find(|instance| instance.id == selected_id)
-        .ok_or_else(|| format!("RSSHub instance '{selected_id}' is not configured"))
+        .ok_or_else(|| format!("RSSHub instance '{selected_id}' is not configured").into())
 }
 
 /// Return configured RSSHub instances and the global default.
 #[tauri::command]
 pub fn get_rsshub_settings(
     database: tauri::State<'_, AppDatabase>,
-) -> Result<RssHubSettings, String> {
+) -> Result<RssHubSettings> {
     load_rsshub_settings(&database)
 }
 
@@ -204,14 +205,14 @@ pub fn get_rsshub_settings(
 pub fn set_rsshub_global_instance(
     instance_id: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<RssHubSettings, String> {
+) -> Result<RssHubSettings> {
     let mut settings = load_rsshub_settings(&database)?;
     if !settings
         .instances
         .iter()
         .any(|instance| instance.id == instance_id)
     {
-        return Err("RSSHub instance is not configured".to_string());
+        return Err("RSSHub instance is not configured".into());
     }
     settings.global_instance_id = instance_id;
     save_rsshub_settings(&database, &settings)?;
@@ -223,12 +224,12 @@ pub fn set_rsshub_global_instance(
 pub fn add_rsshub_instance(
     request: AddRssHubInstanceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<RssHubSettings, String> {
+) -> Result<RssHubSettings> {
     let base_url = normalize_rsshub_base_url(&request.base_url)?;
     let id = rsshub_instance_id_from_base(&base_url);
     let mut settings = load_rsshub_settings(&database)?;
     if settings.instances.iter().any(|instance| instance.id == id) {
-        return Err("RSSHub instance already exists".to_string());
+        return Err("RSSHub instance already exists".into());
     }
     let custom_name = request.name.trim();
     let name = if custom_name.is_empty() {
@@ -254,7 +255,7 @@ pub fn add_rsshub_instance(
 
 /// Probe an RSSHub instance health endpoint.
 #[tauri::command]
-pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceCheck, String> {
+pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceCheck> {
     let base_url = normalize_rsshub_base_url(&base_url)?;
     let checked_url = format!("{base_url}/healthz");
     let response = reqwest::Client::new()
@@ -262,8 +263,7 @@ pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceChe
         .header("user-agent", "Feader/0.1")
         .timeout(Duration::from_secs(8))
         .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     let status = response.status();
     Ok(RssHubInstanceCheck {
         ok: status.is_success(),

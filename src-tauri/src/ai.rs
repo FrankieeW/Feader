@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::error::Result;
 use crate::models::{
     env_reference_name, AiSettings, XPathRulePack, XPathSelectors, XPathSourceSuggestion,
 };
@@ -16,13 +17,14 @@ const AI_REQUEST_TIMEOUT_SECONDS: u64 = 45;
 const AI_RESPONSE_SNIPPET_CAP: usize = 320;
 
 /// Resolve a stored API key: `$NAME`/`${NAME}` from the environment, otherwise literal.
-pub fn resolve_api_key(stored: &str) -> Result<String, String> {
+pub fn resolve_api_key(stored: &str) -> Result<String> {
     let trimmed = stored.trim();
     if trimmed.is_empty() {
-        return Err("AI API key is not configured".to_string());
+        return Err("AI API key is not configured".into());
     }
     if let Some(name) = env_reference_name(trimmed) {
-        return std::env::var(&name).map_err(|_| format!("Environment variable {name} is not set"));
+        return std::env::var(&name)
+            .map_err(|_| format!("Environment variable {name} is not set").into());
     }
     Ok(trimmed.to_string())
 }
@@ -59,7 +61,7 @@ fn keep_valid(value: Option<String>) -> Option<String> {
 }
 
 /// Parse a model response (possibly wrapped in prose/code fences) into validated selectors.
-pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String> {
+pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion> {
     let json = extract_json_object(text).ok_or_else(|| {
         if text.trim_start().starts_with('{') {
             return format!(
@@ -72,13 +74,13 @@ pub fn parse_selectors_json(text: &str) -> Result<XPathSourceSuggestion, String>
             response_snippet(text)
         )
     })?;
-    let raw: SuggestedSelectors = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+    let raw: SuggestedSelectors = serde_json::from_str(&json)?;
 
     let items = keep_valid(raw.items).unwrap_or_default();
     let title = keep_valid(raw.title).unwrap_or_default();
     let url = keep_valid(raw.url).unwrap_or_default();
     if items.is_empty() || title.is_empty() || url.is_empty() {
-        return Err("AI did not return usable selectors".to_string());
+        return Err("AI did not return usable selectors".into());
     }
 
     Ok(XPathSourceSuggestion {
@@ -155,13 +157,13 @@ pub async fn suggest_xpath_selectors(
     stored_api_key: &str,
     page_html: &str,
     rule_packs: &[XPathRulePack],
-) -> Result<XPathSourceSuggestion, String> {
+) -> Result<XPathSourceSuggestion> {
     let base_url = settings.base_url.trim();
     if base_url.is_empty() {
-        return Err("AI base URL is not configured".to_string());
+        return Err("AI base URL is not configured".into());
     }
     if settings.model.trim().is_empty() {
-        return Err("AI model is not configured".to_string());
+        return Err("AI model is not configured".into());
     }
 
     let key = resolve_api_key(stored_api_key)?;
@@ -171,12 +173,12 @@ pub async fn suggest_xpath_selectors(
     let text = match settings.provider.as_str() {
         "anthropic" => call_anthropic(settings, &key, &prompt).await?,
         "openai" => call_openai(settings, &key, &prompt).await?,
-        other => return Err(format!("Unknown AI provider '{other}'")),
+        other => return Err(format!("Unknown AI provider '{other}'").into()),
     };
     parse_selectors_json(&text)
 }
 
-async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
+async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Result<String> {
     let endpoint = configured_endpoint(&settings.base_url, "anthropic");
     let body = serde_json::json!({
         "model": &settings.model,
@@ -191,25 +193,25 @@ async fn call_anthropic(settings: &AiSettings, key: &str, prompt: &str) -> Resul
         .header("content-type", "application/json")
         .json(&body)
         .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     if !response.status().is_success() {
         return Err(format!(
             "AI request failed with status {}",
             response.status()
-        ));
+        )
+        .into());
     }
-    let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    let value: serde_json::Value = response.json().await?;
     let text = extract_model_text(&value).ok_or_else(|| {
-        format!(
+        crate::error::FeaderError::Message(format!(
             "Unexpected Anthropic response shape. Response started with: {}",
             response_snippet(&value.to_string())
-        )
+        ))
     })?;
     Ok(text)
 }
 
-async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String, String> {
+async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<String> {
     let endpoint = configured_endpoint(&settings.base_url, "openai");
     let json_body = serde_json::json!({
         "model": &settings.model,
@@ -222,7 +224,7 @@ async fn call_openai(settings: &AiSettings, key: &str, prompt: &str) -> Result<S
     });
     match send_openai_request(&endpoint, key, &json_body).await {
         Ok(text) => Ok(text),
-        Err(error) if error.contains("status 400") => {
+        Err(error) if error.to_string().contains("status 400") => {
             let plain_body = serde_json::json!({
                 "model": &settings.model,
                 "max_tokens": AI_OUTPUT_TOKEN_CAP,
@@ -241,35 +243,34 @@ async fn send_openai_request(
     endpoint: &str,
     key: &str,
     body: &serde_json::Value,
-) -> Result<String, String> {
+) -> Result<String> {
     let response = ai_http_client()?
         .post(endpoint.to_string())
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json")
         .json(body)
         .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     if !response.status().is_success() {
         return Err(format!(
             "AI request failed with status {}",
             response.status()
-        ));
+        )
+        .into());
     }
-    let value: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    let value: serde_json::Value = response.json().await?;
     extract_model_text(&value).ok_or_else(|| {
-        format!(
+        crate::error::FeaderError::Message(format!(
             "Unexpected OpenAI response shape. Response started with: {}",
             response_snippet(&value.to_string())
-        )
+        ))
     })
 }
 
-fn ai_http_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
+fn ai_http_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECONDS))
-        .build()
-        .map_err(|error| error.to_string())
+        .build()?)
 }
 
 fn configured_endpoint(value: &str, provider: &str) -> String {
@@ -345,13 +346,13 @@ mod tests {
     #[test]
     fn reports_non_json_model_response_snippet() {
         let error = parse_selectors_json("I cannot inspect this page.").unwrap_err();
-        assert!(error.contains("I cannot inspect this page."));
+        assert!(error.to_string().contains("I cannot inspect this page."));
     }
 
     #[test]
     fn reports_incomplete_json_response() {
         let error = parse_selectors_json("{\"items\":\"//article\"").unwrap_err();
-        assert!(error.contains("JSON was incomplete"));
+        assert!(error.to_string().contains("JSON was incomplete"));
     }
 
     #[test]

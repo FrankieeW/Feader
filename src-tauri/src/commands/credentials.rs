@@ -1,6 +1,7 @@
 //! Plugin credential (cookie) commands.
 
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{CredentialCheck, PluginCredential};
 use crate::xpath_adapter;
 
@@ -9,8 +10,8 @@ use crate::xpath_adapter;
 pub fn get_plugin_credential(
     plugin_id: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<PluginCredential, String> {
-    database.get_plugin_credential(&plugin_id)
+) -> Result<PluginCredential> {
+    Ok(database.get_plugin_credential(&plugin_id)?)
 }
 
 /// Save (or clear, when blank) a plugin-level cookie.
@@ -19,9 +20,9 @@ pub fn set_plugin_credential(
     plugin_id: String,
     cookie: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<PluginCredential, String> {
+) -> Result<PluginCredential> {
     database.set_plugin_credential(&plugin_id, &cookie)?;
-    database.get_plugin_credential(&plugin_id)
+    Ok(database.get_plugin_credential(&plugin_id)?)
 }
 
 /// Probe whether the stored cookie is still valid for a plugin.
@@ -31,10 +32,10 @@ pub async fn check_plugin_credential(
     check_url: String,
     logged_in_xpath: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<CredentialCheck, String> {
+) -> Result<CredentialCheck> {
     let cookie = database.raw_plugin_cookie(&plugin_id)?;
     if cookie.is_none() {
-        return Err("尚未设置该插件的 cookie".to_string());
+        return Err("尚未设置该插件的 cookie".into());
     }
     let (ok, message) = xpath_adapter::check_login_state(
         check_url.trim(),

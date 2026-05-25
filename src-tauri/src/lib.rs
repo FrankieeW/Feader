@@ -4,6 +4,7 @@ mod ai;
 pub mod cli;
 mod commands;
 mod db;
+mod error;
 mod feed_adapter;
 mod json_adapter;
 mod models;

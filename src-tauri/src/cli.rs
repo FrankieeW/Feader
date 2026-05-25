@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{ArticleFilter, Source, SourceRefreshResult};
 
 const DATABASE_FILE: &str = "feader.sqlite";
@@ -28,7 +29,7 @@ pub fn run_from_env() -> i32 {
     }
 }
 
-fn run(args: Vec<String>) -> Result<String, String> {
+fn run(args: Vec<String>) -> Result<String> {
     let invocation = CliInvocation::parse(args)?;
     if invocation.help {
         return Ok(help_text());
@@ -74,7 +75,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
             }
             Command::SourceDelete { id, yes } => {
                 if !yes {
-                    return Err("Deleting a source requires --yes".to_string());
+                    return Err("Deleting a source requires --yes".into());
                 }
                 database.delete_source(id)?;
                 to_json(&CommandStatus::ok(format!("Deleted source {id}")))
@@ -123,7 +124,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 async fn refresh_for_cli(
     database: &AppDatabase,
     source: Source,
-) -> Result<SourceRefreshResult, String> {
+) -> Result<SourceRefreshResult> {
     match crate::refresh_source_record(database, &source).await {
         Ok(article_count) => Ok(SourceRefreshResult {
             source_id: source.id,
@@ -132,19 +133,19 @@ async fn refresh_for_cli(
             error: None,
         }),
         Err(error) => {
-            database.record_source_error(source.id, &error)?;
+            database.record_source_error(source.id, &error.to_string())?;
             Ok(SourceRefreshResult {
                 source_id: source.id,
                 ok: false,
                 article_count: 0,
-                error: Some(error),
+                error: Some(error.to_string()),
             })
         }
     }
 }
 
-fn to_json<T: Serialize>(value: &T) -> Result<String, String> {
-    serde_json::to_string_pretty(value).map_err(|error| error.to_string())
+fn to_json<T: Serialize>(value: &T) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)?)
 }
 
 fn default_database_path() -> PathBuf {
@@ -197,7 +198,7 @@ struct CliInvocation {
 }
 
 impl CliInvocation {
-    fn parse(args: Vec<String>) -> Result<Self, String> {
+    fn parse(args: Vec<String>) -> Result<Self> {
         let mut parser = ArgParser::new(args);
         let mut database_path = None;
         let mut help = false;
@@ -258,9 +259,9 @@ enum Command {
 }
 
 impl Command {
-    fn parse(args: Vec<String>) -> Result<Self, String> {
+    fn parse(args: Vec<String>) -> Result<Self> {
         if args.is_empty() {
-            return Err(help_text());
+            return Err(help_text().into());
         }
 
         match args[0].as_str() {
@@ -268,7 +269,7 @@ impl Command {
             "source" => parse_source_command(&args[1..]),
             "articles" => parse_articles_command(&args[1..]),
             "article" => parse_articles_command(&args[1..]),
-            _ => Err(help_text()),
+            _ => Err(help_text().into()),
         }
     }
 }
@@ -292,16 +293,16 @@ impl CommandStatus {
     }
 }
 
-fn parse_sources_command(args: &[String]) -> Result<Command, String> {
+fn parse_sources_command(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("list") | None => Ok(Command::SourcesList),
         Some("add") => parse_source_add(&args[1..]),
         Some("refresh") => parse_source_refresh(&args[1..]),
-        _ => Err(help_text()),
+        _ => Err(help_text().into()),
     }
 }
 
-fn parse_source_command(args: &[String]) -> Result<Command, String> {
+fn parse_source_command(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("add") => parse_source_add(&args[1..]),
         Some("list") => Ok(Command::SourcesList),
@@ -309,11 +310,11 @@ fn parse_source_command(args: &[String]) -> Result<Command, String> {
         Some("category") => parse_source_category(&args[1..]),
         Some("delete") | Some("remove") => parse_source_delete(&args[1..]),
         Some("refresh") => parse_source_refresh(&args[1..]),
-        _ => Err(help_text()),
+        _ => Err(help_text().into()),
     }
 }
 
-fn parse_source_add(args: &[String]) -> Result<Command, String> {
+fn parse_source_add(args: &[String]) -> Result<Command> {
     let mut parser = ArgParser::new(args.to_vec());
     let mut url = None;
     let mut title = None;
@@ -324,10 +325,10 @@ fn parse_source_add(args: &[String]) -> Result<Command, String> {
             "--url" => url = Some(parser.value("--url")?),
             "--title" => title = Some(parser.value("--title")?),
             "--category" => category = Some(parser.value("--category")?),
-            value if value.starts_with('-') => return Err(format!("Unknown option: {value}")),
+            value if value.starts_with('-') => return Err(format!("Unknown option: {value}").into()),
             value => {
                 if url.is_some() {
-                    return Err("Only one source URL can be added at a time".to_string());
+                    return Err("Only one source URL can be added at a time".into());
                 }
                 url = Some(value.to_string());
             }
@@ -342,9 +343,9 @@ fn parse_source_add(args: &[String]) -> Result<Command, String> {
     })
 }
 
-fn parse_source_rename(args: &[String]) -> Result<Command, String> {
+fn parse_source_rename(args: &[String]) -> Result<Command> {
     if args.len() < 2 {
-        return Err("Usage: feader source rename <id> <title>".to_string());
+        return Err("Usage: feader source rename <id> <title>".into());
     }
     Ok(Command::SourceRename {
         id: parse_id(&args[0])?,
@@ -352,9 +353,9 @@ fn parse_source_rename(args: &[String]) -> Result<Command, String> {
     })
 }
 
-fn parse_source_category(args: &[String]) -> Result<Command, String> {
+fn parse_source_category(args: &[String]) -> Result<Command> {
     if args.is_empty() {
-        return Err("Usage: feader source category <id> [category|--clear]".to_string());
+        return Err("Usage: feader source category <id> [category|--clear]".into());
     }
     let id = parse_id(&args[0])?;
     let category = if args.iter().any(|arg| arg == "--clear") || args.len() == 1 {
@@ -365,40 +366,39 @@ fn parse_source_category(args: &[String]) -> Result<Command, String> {
     Ok(Command::SourceCategory { id, category })
 }
 
-fn parse_source_delete(args: &[String]) -> Result<Command, String> {
+fn parse_source_delete(args: &[String]) -> Result<Command> {
     let mut id = None;
     let mut yes = false;
 
     for arg in args {
         match arg.as_str() {
             "--yes" | "-y" => yes = true,
-            value if value.starts_with('-') => return Err(format!("Unknown option: {value}")),
+            value if value.starts_with('-') => return Err(format!("Unknown option: {value}").into()),
             value => id = Some(parse_id(value)?),
         }
     }
 
+    let id = id.ok_or_else(|| "Usage: feader source delete <id> --yes")?;
     Ok(Command::SourceDelete {
-        id: id.ok_or_else(|| "Usage: feader source delete <id> --yes".to_string())?,
+        id,
         yes,
     })
 }
 
-fn parse_source_refresh(args: &[String]) -> Result<Command, String> {
+fn parse_source_refresh(args: &[String]) -> Result<Command> {
     if args.iter().any(|arg| arg == "--all") {
         return Ok(Command::SourceRefresh {
             target: RefreshTarget::All,
         });
     }
 
-    let id = args
-        .first()
-        .ok_or_else(|| "Usage: feader source refresh <id|--all>".to_string())?;
+    let id = args.first().expect("Usage: feader source refresh <id|--all>");
     Ok(Command::SourceRefresh {
         target: RefreshTarget::One(parse_id(id)?),
     })
 }
 
-fn parse_articles_command(args: &[String]) -> Result<Command, String> {
+fn parse_articles_command(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
         Some("list") | None => {
             let mut parser = ArgParser::new(args.get(1..).unwrap_or_default().to_vec());
@@ -418,7 +418,7 @@ fn parse_articles_command(args: &[String]) -> Result<Command, String> {
                             .parse::<usize>()
                             .map_err(|_| "--limit must be a positive integer".to_string())?
                     }
-                    value => return Err(format!("Unknown option: {value}")),
+                    value => return Err(format!("Unknown option: {value}").into()),
                 }
             }
 
@@ -429,21 +429,21 @@ fn parse_articles_command(args: &[String]) -> Result<Command, String> {
                 limit,
             })
         }
-        _ => Err(help_text()),
+        _ => Err(help_text().into()),
     }
 }
 
-fn parse_id(value: &str) -> Result<i64, String> {
+fn parse_id(value: &str) -> Result<i64> {
     value
         .parse::<i64>()
-        .map_err(|_| format!("Invalid numeric id: {value}"))
+        .map_err(|_| format!("Invalid numeric id: {value}").into())
 }
 
-fn required_string(value: Option<String>, message: &str) -> Result<String, String> {
+fn required_string(value: Option<String>, message: &str) -> Result<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| message.to_string())
+        .ok_or_else(|| message.into())
 }
 
 #[derive(Debug)]
@@ -465,10 +465,10 @@ impl ArgParser {
         value
     }
 
-    fn value(&mut self, option: &str) -> Result<String, String> {
+    fn value(&mut self, option: &str) -> Result<String> {
         self.next()
             .filter(|value| !value.starts_with('-'))
-            .ok_or_else(|| format!("{option} requires a value"))
+            .ok_or_else(|| format!("{option} requires a value").into())
     }
 }
 
@@ -607,7 +607,7 @@ mod tests {
         ])
         .expect_err("delete is gated");
 
-        assert_eq!(error, "Deleting a source requires --yes");
+        assert_eq!(error.to_string(), "Deleting a source requires --yes");
         assert_eq!(database.list_sources().expect("sources list").len(), 1);
         let _ = fs::remove_file(database_path);
     }

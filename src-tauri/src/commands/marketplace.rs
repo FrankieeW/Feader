@@ -12,6 +12,7 @@ use crate::models::{
     XPathRulePack, PLUGIN_KIND_APP_UI_THEME,
 };
 use crate::plugin_registry;
+use crate::error::Result;
 
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 const PLUGIN_MARKETS_KEY: &str = "plugin_markets";
@@ -28,14 +29,14 @@ pub fn list_xpath_plugin_packs() -> Vec<XPathRulePack> {
 pub async fn fetch_registry_packs(
     force_refresh: Option<bool>,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<MarketplacePluginPack>, String> {
+) -> Result<Vec<MarketplacePluginPack>> {
     load_registry_packs(&database, force_refresh.unwrap_or(false)).await
 }
 
 async fn load_registry_packs(
     database: &AppDatabase,
     force_refresh: bool,
-) -> Result<Vec<MarketplacePluginPack>, String> {
+) -> Result<Vec<MarketplacePluginPack>> {
     let markets = load_plugin_markets(database)?;
     let installed_versions = installed_plugin_versions(database)?;
     let mut all_packs = Vec::new();
@@ -117,7 +118,7 @@ async fn load_market_index(
     database: &AppDatabase,
     market: &PluginMarket,
     force_refresh: bool,
-) -> Result<RegistryIndex, String> {
+) -> Result<RegistryIndex> {
     if force_refresh {
         return fetch_and_cache_market_index(database, market).await;
     }
@@ -139,9 +140,9 @@ async fn load_market_index(
 async fn fetch_and_cache_market_index(
     database: &AppDatabase,
     market: &PluginMarket,
-) -> Result<RegistryIndex, String> {
+) -> Result<RegistryIndex> {
     let index = plugin_registry::fetch_registry_index_from_market(market).await?;
-    let json = serde_json::to_string(&index).map_err(|error| error.to_string())?;
+    let json = serde_json::to_string(&index)?;
     database.set_cache(&format!("registry_index_{}", market.id), &json)?;
     Ok(index)
 }
@@ -164,7 +165,7 @@ fn cached_plugin_pack_is_usable(pack: &XPathRulePack) -> bool {
     pack.kind != PLUGIN_KIND_APP_UI_THEME || pack.tokens.is_some()
 }
 
-fn installed_plugin_versions(database: &AppDatabase) -> Result<HashMap<String, String>, String> {
+fn installed_plugin_versions(database: &AppDatabase) -> Result<HashMap<String, String>> {
     Ok(database
         .list_installed_plugin_packs()?
         .into_iter()
@@ -172,7 +173,7 @@ fn installed_plugin_versions(database: &AppDatabase) -> Result<HashMap<String, S
         .collect())
 }
 
-fn load_plugin_markets(database: &AppDatabase) -> Result<Vec<PluginMarket>, String> {
+fn load_plugin_markets(database: &AppDatabase) -> Result<Vec<PluginMarket>> {
     let mut markets = database
         .get_setting(PLUGIN_MARKETS_KEY)?
         .and_then(|json| serde_json::from_str::<Vec<PluginMarket>>(&json).ok())
@@ -184,15 +185,15 @@ fn load_plugin_markets(database: &AppDatabase) -> Result<Vec<PluginMarket>, Stri
     Ok(markets)
 }
 
-fn save_plugin_markets(database: &AppDatabase, markets: &[PluginMarket]) -> Result<(), String> {
-    let json = serde_json::to_string(markets).map_err(|error| error.to_string())?;
-    database.set_setting(PLUGIN_MARKETS_KEY, &json)
+fn save_plugin_markets(database: &AppDatabase, markets: &[PluginMarket]) -> Result<()> {
+    let json = serde_json::to_string(markets)?;
+    Ok(database.set_setting(PLUGIN_MARKETS_KEY, &json)?)
 }
 
 #[tauri::command]
 pub fn list_plugin_markets(
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<PluginMarket>, String> {
+) -> Result<Vec<PluginMarket>> {
     load_plugin_markets(&database)
 }
 
@@ -200,12 +201,12 @@ pub fn list_plugin_markets(
 pub async fn add_plugin_market(
     request: AddPluginMarketRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<PluginMarket>, String> {
+) -> Result<Vec<PluginMarket>> {
     let market = plugin_market_from_github(&request)?;
     plugin_registry::fetch_registry_index_from_market(&market).await?;
     let mut markets = load_plugin_markets(&database)?;
     if markets.iter().any(|item| item.id == market.id) {
-        return Err("Plugin market already exists".to_string());
+        return Err("Plugin market already exists".into());
     }
     markets.push(market);
     save_plugin_markets(&database, &markets)?;
@@ -216,7 +217,7 @@ pub async fn add_plugin_market(
 pub async fn install_plugin_from_market(
     request: InstallPluginFromMarketRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathRulePack, String> {
+) -> Result<XPathRulePack> {
     let markets = load_plugin_markets(&database)?;
     let market = markets
         .into_iter()
@@ -254,7 +255,7 @@ pub async fn install_plugin_from_market(
 pub async fn install_plugin_from_url(
     request: InstallPluginFromUrlRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathRulePack, String> {
+) -> Result<XPathRulePack> {
     let pack = plugin_registry::fetch_plugin_pack_from_url(&request.url).await?;
     database.install_plugin_pack(&pack)?;
     Ok(pack)
@@ -264,14 +265,14 @@ pub async fn install_plugin_from_url(
 pub fn uninstall_plugin(
     plugin_id: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<(), String> {
-    database.uninstall_plugin_pack(&plugin_id)
+) -> Result<()> {
+    Ok(database.uninstall_plugin_pack(&plugin_id)?)
 }
 
 #[tauri::command]
 pub fn list_installed_plugin_packs(
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<XPathRulePack>, String> {
+) -> Result<Vec<XPathRulePack>> {
     let mut packs = plugin_registry::bundled_xpath_rule_packs();
     packs.extend(database.list_installed_plugin_packs()?);
     Ok(packs)
@@ -280,14 +281,14 @@ pub fn list_installed_plugin_packs(
 #[tauri::command]
 pub fn create_plugin_market_template(
     app_handle: tauri::AppHandle,
-) -> Result<PluginMarketTemplate, String> {
+) -> Result<PluginMarketTemplate> {
     let root = app_handle
         .path()
         .app_data_dir()
-        .map_err(|error| error.to_string())?
+        .map_err(|e| e.to_string())?
         .join("plugin-market-template");
-    fs::create_dir_all(root.join("registry")).map_err(|error| error.to_string())?;
-    fs::create_dir_all(root.join("plugins/example")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root.join("registry"))?;
+    fs::create_dir_all(root.join("plugins/example"))?;
     let index = r#"{
   "schemaVersion": "feader-registry/v1",
   "updatedAt": "2026-05-24T00:00:00Z",
@@ -348,7 +349,7 @@ pub fn create_plugin_market_template(
         ("plugins/example/xpath-rule-pack.json", pack),
     ];
     for (path, content) in files {
-        fs::write(root.join(path), content).map_err(|error| error.to_string())?;
+        fs::write(root.join(path), content)?;
     }
     Ok(PluginMarketTemplate {
         path: root.to_string_lossy().to_string(),
@@ -360,7 +361,7 @@ pub fn create_plugin_market_template(
     })
 }
 
-fn plugin_market_from_github(request: &AddPluginMarketRequest) -> Result<PluginMarket, String> {
+fn plugin_market_from_github(request: &AddPluginMarketRequest) -> Result<PluginMarket> {
     let branch = request.branch.as_deref().unwrap_or("main").trim();
     let branch = if branch.is_empty() { "main" } else { branch };
     let repo = request.repository.trim().trim_end_matches('/');
@@ -387,7 +388,7 @@ fn plugin_market_from_github(request: &AddPluginMarketRequest) -> Result<PluginM
     })
 }
 
-fn parse_github_repo(value: &str) -> Result<(String, String), String> {
+fn parse_github_repo(value: &str) -> Result<(String, String)> {
     let without_git = value.trim_end_matches(".git");
     if let Some(rest) = without_git.strip_prefix("https://github.com/") {
         return parse_owner_repo(rest);
@@ -401,7 +402,7 @@ fn parse_github_repo(value: &str) -> Result<(String, String), String> {
     parse_owner_repo(without_git)
 }
 
-fn parse_owner_repo(value: &str) -> Result<(String, String), String> {
+fn parse_owner_repo(value: &str) -> Result<(String, String)> {
     let mut parts = value.split('/').filter(|part| !part.trim().is_empty());
     let owner = parts
         .next()
@@ -410,7 +411,7 @@ fn parse_owner_repo(value: &str) -> Result<(String, String), String> {
         .next()
         .ok_or_else(|| "GitHub repo is required".to_string())?;
     if owner.contains("..") || repo.contains("..") || parts.next().is_some() {
-        return Err("Use a GitHub repository in owner/repo form".to_string());
+        return Err("Use a GitHub repository in owner/repo form".into());
     }
     Ok((owner.to_string(), repo.to_string()))
 }

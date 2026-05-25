@@ -8,6 +8,7 @@ use sxd_document::parser;
 use sxd_xpath::{nodeset::Node, Context, Factory, Value};
 use url::Url;
 
+use crate::error::Result;
 use crate::models::{
     env_reference_name, ParsedArticle, ParsedFeed, ReaderConfig, XPathCustomFieldScope,
     XPathFieldDiagnostic, XPathPreview, XPathRulePack, XPathSelectors,
@@ -177,7 +178,7 @@ fn sanitize_xml_attribute_values(value: &str) -> String {
 pub async fn fetch_xpath_source(
     url: &str,
     selectors: &XPathSelectors,
-) -> Result<ParsedFeed, String> {
+) -> Result<ParsedFeed> {
     let mut visited = std::collections::HashSet::new();
     let mut current = url.to_string();
     let mut articles = Vec::new();
@@ -228,7 +229,7 @@ pub async fn fetch_xpath_source(
 pub async fn preview_xpath_source(
     url: &str,
     selectors: &XPathSelectors,
-) -> Result<XPathPreview, String> {
+) -> Result<XPathPreview> {
     let body = fetch_page(url, selectors).await?;
     let mut preview = preview_xpath_document(url, &normalize_html_document(&body)?, selectors)?;
     enrich_preview_with_detail_content(&mut preview.articles, selectors).await?;
@@ -236,7 +237,7 @@ pub async fn preview_xpath_source(
 }
 
 /// Fetch a URL and return its normalized (real-world-tolerant) XHTML.
-pub async fn fetch_normalized(url: &str) -> Result<String, String> {
+pub async fn fetch_normalized(url: &str) -> Result<String> {
     let body = fetch_page(url, &XPathSelectors::default()).await?;
     normalize_html_document(&body)
 }
@@ -246,7 +247,7 @@ pub fn is_valid_xpath(expression: &str) -> bool {
     Factory::new().build(expression).ok().flatten().is_some()
 }
 
-async fn fetch_page(url: &str, selectors: &XPathSelectors) -> Result<String, String> {
+async fn fetch_page(url: &str, selectors: &XPathSelectors) -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(XPATH_FETCH_TIMEOUT_SECONDS))
         .build()
@@ -258,7 +259,7 @@ async fn fetch_page(url: &str, selectors: &XPathSelectors) -> Result<String, Str
     let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("XPath source request failed with status {status}"));
+        return Err(format!("XPath source request failed with status {status}").into());
     }
 
     let content_type = response
@@ -272,7 +273,7 @@ async fn fetch_page(url: &str, selectors: &XPathSelectors) -> Result<String, Str
     Ok(body)
 }
 
-fn cookie_header_value(selectors: &XPathSelectors) -> Result<Option<String>, String> {
+fn cookie_header_value(selectors: &XPathSelectors) -> Result<Option<String>> {
     let Some(value) = selectors
         .cookie
         .as_deref()
@@ -289,7 +290,7 @@ fn cookie_header_value(selectors: &XPathSelectors) -> Result<Option<String>, Str
     normalize_cookie_input(value).map(Some)
 }
 
-fn normalize_cookie_input(value: &str) -> Result<String, String> {
+fn normalize_cookie_input(value: &str) -> Result<String> {
     let trimmed = value.trim();
     if !trimmed.starts_with('{') {
         return Ok(trimmed.to_string());
@@ -307,7 +308,7 @@ fn normalize_cookie_input(value: &str) -> Result<String, String> {
         })
         .collect::<Vec<_>>();
     if cookies.is_empty() {
-        return Err("Cookie JSON did not contain any stringable values".to_string());
+        return Err("Cookie JSON did not contain any stringable values".into());
     }
     Ok(cookies.join("; "))
 }
@@ -321,7 +322,7 @@ fn cookie_json_value(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
+fn reject_non_html_body(body: &str, content_type: &str) -> Result<()> {
     let trimmed = body.trim_start();
     let content_type = content_type.to_ascii_lowercase();
     if content_type.contains("json")
@@ -333,7 +334,7 @@ fn reject_non_html_body(body: &str, content_type: &str) -> Result<(), String> {
         return Err(format!(
             "XPath sources require an HTML/XML page, but this URL returned JSON-like content: {}",
             body_snippet(trimmed)
-        ));
+        ).into());
     }
     Ok(())
 }
@@ -345,12 +346,12 @@ fn body_snippet(body: &str) -> String {
         .replace(['\n', '\r', '\t'], " ")
 }
 
-fn normalize_html_document(raw: &str) -> Result<String, String> {
+fn normalize_html_document(raw: &str) -> Result<String> {
     reject_non_html_body(raw, "")?;
     if looks_like_interstitial_document(raw) {
         return Err(
             "XPath sources require the static HTML page, but this URL returned an anti-bot or browser-check page."
-                .to_string(),
+                .into(),
         );
     }
     let normalized = normalize_html(raw);
@@ -358,14 +359,14 @@ fn normalize_html_document(raw: &str) -> Result<String, String> {
     if looks_like_interstitial_document(trimmed) {
         return Err(
             "XPath sources require the static HTML page, but this URL returned an anti-bot or browser-check page."
-                .to_string(),
+                .into(),
         );
     }
     if !(trimmed.starts_with('<') || trimmed.starts_with("<?xml")) {
         return Err(format!(
             "XPath sources require an HTML/XML page, but normalization produced non-XML content: {}",
             body_snippet(trimmed)
-        ));
+        ).into());
     }
     Ok(normalized)
 }
@@ -398,7 +399,7 @@ pub fn resolve_cookie(source_cookie: Option<&str>, plugin_cookie: Option<&str>) 
 /// 1. Full HTML normalize → XML parse → XPath evaluation (precise).
 /// 2. Text-based keyword extraction from the XPath expression.
 /// 3. Generic logout-link detection as a last resort.
-pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool, String> {
+pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool> {
     // Strategy 1: full normalize → parse → XPath.
     if let Ok(normalized) = normalize_html_document(document) {
         if let Ok(package) = parser::parse(&normalized) {
@@ -433,7 +434,7 @@ pub fn evaluate_logged_in(document: &str, logged_in_xpath: &str) -> Result<bool,
 }
 
 /// Extract single-quoted string literals with ≥ 3 characters from an XPath expression.
-fn extract_xpath_terms(xpath: &str) -> Result<Vec<String>, String> {
+fn extract_xpath_terms(xpath: &str) -> Result<Vec<String>> {
     let re = Regex::new("'([^']+)'").map_err(|e| e.to_string())?;
     let terms: Vec<String> = re
         .captures_iter(xpath)
@@ -449,7 +450,7 @@ pub async fn check_login_state(
     check_url: &str,
     cookie: Option<&str>,
     logged_in_xpath: &str,
-) -> Result<(bool, String), String> {
+) -> Result<(bool, String)> {
     let mut selectors = XPathSelectors::default();
     selectors.cookie = cookie.map(str::to_string);
     let body = fetch_page(check_url, &selectors).await?;
@@ -468,7 +469,7 @@ pub fn parse_xpath_source(
     base_url: &str,
     document: &str,
     selectors: &XPathSelectors,
-) -> Result<ParsedFeed, String> {
+) -> Result<ParsedFeed> {
     validate_selectors(selectors)?;
     let package = parser::parse(document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
@@ -481,7 +482,7 @@ pub fn parse_xpath_source(
         .map_err(|error| error.to_string())?
     {
         Value::Nodeset(nodeset) => nodeset.document_order(),
-        _ => return Err("XPath items selector must return nodes".to_string()),
+        _ => return Err("XPath items selector must return nodes".into()),
     };
 
     let mut articles = Vec::new();
@@ -531,7 +532,7 @@ pub fn parse_xpath_source(
 async fn enrich_articles_with_detail_content(
     mut articles: Vec<ParsedArticle>,
     selectors: &XPathSelectors,
-) -> Result<Vec<ParsedArticle>, String> {
+) -> Result<Vec<ParsedArticle>> {
     let selector = selectors
         .detail_content
         .as_deref()
@@ -561,7 +562,7 @@ async fn enrich_articles_with_detail_content(
 async fn enrich_preview_with_detail_content(
     articles: &mut [ParsedArticle],
     selectors: &XPathSelectors,
-) -> Result<(), String> {
+) -> Result<()> {
     let selector = selectors
         .detail_content
         .as_deref()
@@ -590,7 +591,7 @@ async fn fetch_detail_content(
     url: &str,
     selector: Option<&str>,
     selectors: &XPathSelectors,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>)> {
     let body = fetch_page(url, selectors).await?;
     let document = normalize_html_document(&body)?;
     let package = parser::parse(&document).map_err(|error| {
@@ -616,7 +617,7 @@ async fn fetch_detail_preview(
     url: &str,
     selector: Option<&str>,
     selectors: &XPathSelectors,
-) -> Result<(Option<String>, Option<String>), String> {
+) -> Result<(Option<String>, Option<String>)> {
     let body = fetch_page(url, selectors).await?;
     let document = normalize_html_document(&body)?;
     let package = parser::parse(&document).map_err(|error| {
@@ -632,7 +633,7 @@ async fn fetch_detail_preview(
 }
 
 #[cfg(test)]
-fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<String>, String> {
+fn extract_detail_content_html(document: &str, selector: &str) -> Result<Option<String>> {
     let package = parser::parse(document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
@@ -644,7 +645,7 @@ pub fn apply_reader_transforms(
     html: &str,
     base_url: &str,
     reader: &ReaderConfig,
-) -> Result<String, String> {
+) -> Result<String> {
     let mut out = html.to_string();
     for selector in &reader.remove_selectors {
         let selector = selector.trim();
@@ -684,7 +685,7 @@ fn rewrite_attr_urls(html: &str, base: &url::Url, attr: &str) -> String {
         .to_string()
 }
 
-fn evaluate_node_html_fragments(document: &str, selector: &str) -> Result<Vec<String>, String> {
+fn evaluate_node_html_fragments(document: &str, selector: &str) -> Result<Vec<String>> {
     let normalized = normalize_html_document(document)?;
     let package = parser::parse(&normalized).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
@@ -732,7 +733,7 @@ fn serialize_node_html(node: Node<'_>) -> Option<String> {
     }
 }
 
-fn apply_content_cleanup(value: &str, selectors: &XPathSelectors) -> Result<String, String> {
+fn apply_content_cleanup(value: &str, selectors: &XPathSelectors) -> Result<String> {
     let mut cleaned = value.to_string();
     for rule in &selectors.content_cleanup {
         let pattern = rule.pattern.trim();
@@ -752,7 +753,7 @@ fn custom_fields_json(
     node: Node<'_>,
     selectors: &XPathSelectors,
     scope: XPathCustomFieldScope,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>> {
     let mut fields = serde_json::Map::new();
     for field in selectors
         .custom_fields
@@ -789,7 +790,7 @@ fn custom_fields_json(
     }
 }
 
-fn merge_tags_json(target: &mut Option<String>, incoming: Option<String>) -> Result<(), String> {
+fn merge_tags_json(target: &mut Option<String>, incoming: Option<String>) -> Result<()> {
     let Some(incoming) = incoming else {
         return Ok(());
     };
@@ -828,7 +829,7 @@ pub fn preview_xpath_document(
     base_url: &str,
     document: &str,
     selectors: &XPathSelectors,
-) -> Result<XPathPreview, String> {
+) -> Result<XPathPreview> {
     let package = parser::parse(document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
@@ -863,7 +864,7 @@ pub fn preview_xpath_document(
                 true,
                 Some(items_expression),
                 "invalid",
-                &error,
+                &error.to_string(),
                 None,
             ));
             return Ok(XPathPreview {
@@ -1132,7 +1133,7 @@ fn next_page_url(
     base_url: &str,
     document: &str,
     selectors: &XPathSelectors,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>> {
     let package = parser::parse(document).map_err(|error| {
         format!("XPath adapter currently expects well-formed static HTML/XML: {error}")
     })?;
@@ -1142,15 +1143,15 @@ fn next_page_url(
         .transpose()
 }
 
-fn validate_selectors(selectors: &XPathSelectors) -> Result<(), String> {
+fn validate_selectors(selectors: &XPathSelectors) -> Result<()> {
     if selectors.items.trim().is_empty() {
-        return Err("XPath items selector is required".to_string());
+        return Err("XPath items selector is required".into());
     }
     if selectors.title.trim().is_empty() {
-        return Err("XPath title selector is required".to_string());
+        return Err("XPath title selector is required".into());
     }
     if selectors.url.trim().is_empty() {
-        return Err("XPath URL selector is required".to_string());
+        return Err("XPath URL selector is required".into());
     }
     for rule in &selectors.content_cleanup {
         let pattern = rule.pattern.trim();
@@ -1256,7 +1257,7 @@ fn diagnose_selector_field(field: SelectorField<'_>, items: &[Node<'_>]) -> XPat
             field.required,
             Some(expression),
             "invalid",
-            &error,
+            &error.to_string(),
             None,
         );
     }
@@ -1329,7 +1330,7 @@ fn diagnose_root_selector_field(field: SelectorField<'_>, root: Node<'_>) -> XPa
             field.required,
             Some(expression),
             "invalid",
-            &error,
+            &error.to_string(),
             None,
         ),
     }
@@ -1355,7 +1356,7 @@ fn field_diagnostic(
     }
 }
 
-fn evaluate_required_string(node: Node<'_>, expression: &str) -> Result<Option<String>, String> {
+fn evaluate_required_string(node: Node<'_>, expression: &str) -> Result<Option<String>> {
     evaluate_optional_string(node, Some(expression))
 }
 
@@ -1366,7 +1367,7 @@ fn preview_optional_string(node: Node<'_>, expression: Option<&str>) -> Option<S
 fn evaluate_optional_string(
     node: Node<'_>,
     expression: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>> {
     let Some(expression) = expression.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
@@ -1458,7 +1459,7 @@ fn escape_html(value: &str, in_attribute: bool) -> String {
 fn evaluate_content_html(
     item: Node<'_>,
     expression: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>> {
     let Some(expression) = expression.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
@@ -1475,18 +1476,18 @@ fn evaluate_content_html(
     Ok(None)
 }
 
-fn compile_xpath(expression: &str) -> Result<sxd_xpath::XPath, String> {
+fn compile_xpath(expression: &str) -> Result<sxd_xpath::XPath> {
     Factory::new()
         .build(expression)
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("Invalid XPath expression: {expression}"))
+        .ok_or_else(|| format!("Invalid XPath expression: {expression}").into())
 }
 
-fn absolutize_url(base_url: &str, value: &str) -> Result<String, String> {
+fn absolutize_url(base_url: &str, value: &str) -> Result<String> {
     let base = Url::parse(base_url).map_err(|error| error.to_string())?;
-    base.join(value)
+    Ok(base.join(value)
         .map(|url| url.to_string())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?)
 }
 
 #[cfg(test)]

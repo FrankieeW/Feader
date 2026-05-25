@@ -2,6 +2,7 @@
 
 use crate::commands::rsshub::{build_rsshub_url, normalize_rsshub_route, resolve_rsshub_instance};
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{
     AddRssHubSourceRequest, AddSourceRequest, AddXPathSourceRequest, Article, ArticleFilter,
     PreviewXPathSourceRequest, RssHubSourceConfig, Source, SourceRefreshResult,
@@ -13,8 +14,8 @@ use crate::{ai, feed_adapter, json_adapter, plugin_registry, xpath_adapter};
 
 /// Return all configured sources.
 #[tauri::command]
-pub fn list_sources(database: tauri::State<'_, AppDatabase>) -> Result<Vec<Source>, String> {
-    database.list_sources()
+pub fn list_sources(database: tauri::State<'_, AppDatabase>) -> Result<Vec<Source>> {
+    Ok(database.list_sources()?)
 }
 
 /// Suggest XPath selectors for a page using the configured AI provider.
@@ -22,22 +23,22 @@ pub fn list_sources(database: tauri::State<'_, AppDatabase>) -> Result<Vec<Sourc
 pub async fn suggest_xpath_source(
     url: String,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathSourceSuggestion, String> {
+) -> Result<XPathSourceSuggestion> {
     let url = url.trim();
     if url.is_empty() {
-        return Err("XPath source URL is required".to_string());
+        return Err("XPath source URL is required".into());
     }
 
     let settings = database.get_ai_settings()?;
     if !settings.enabled || !settings.api_key_set {
-        return Err("AI is not configured".to_string());
+        return Err("AI is not configured".into());
     }
     let raw_key = database.raw_ai_api_key()?;
     let html = xpath_adapter::fetch_normalized(url).await?;
     if xpath_adapter::looks_like_interstitial_document(&html) {
         return Err(
             "Fetched page is an anti-bot or browser-check page, not the static page content."
-                .to_string(),
+                .into(),
         );
     }
     let rule_packs = plugin_registry::bundled_xpath_rule_packs();
@@ -57,10 +58,10 @@ pub async fn suggest_xpath_source(
 pub async fn add_source(
     request: AddSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let url = request.url.trim();
     if url.is_empty() {
-        return Err("Feed URL is required".to_string());
+        return Err("Feed URL is required".into());
     }
 
     let feed = feed_adapter::fetch_feed(url).await?;
@@ -73,7 +74,7 @@ pub async fn add_source(
             .filter(|title| !title.trim().is_empty()),
     )?;
     database.upsert_articles(source.id, feed.title.as_deref(), &feed.articles)?;
-    database.get_source(source.id)
+    Ok(database.get_source(source.id)?)
 }
 
 /// Add an RSSHub route source after validating that the selected instance returns a feed.
@@ -81,7 +82,7 @@ pub async fn add_source(
 pub async fn add_rsshub_source(
     request: AddRssHubSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let route = normalize_rsshub_route(&request.route)?;
     let instance = resolve_rsshub_instance(&database, request.instance_id.as_deref())?;
     let feed_url = build_rsshub_url(&instance, &route)?;
@@ -104,7 +105,7 @@ pub async fn add_rsshub_source(
         &config,
     )?;
     database.upsert_articles(source.id, feed.title.as_deref(), &feed.articles)?;
-    database.get_source(source.id)
+    Ok(database.get_source(source.id)?)
 }
 
 /// Update the RSSHub instance override for one source.
@@ -112,10 +113,10 @@ pub async fn add_rsshub_source(
 pub fn update_rsshub_source_instance(
     request: UpdateRssHubSourceInstanceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let source = database.get_source(request.source_id)?;
     if source.kind != SOURCE_KIND_RSSHUB {
-        return Err("RSSHub instance can only be changed for RSSHub sources".to_string());
+        return Err("RSSHub instance can only be changed for RSSHub sources".into());
     }
     let mut config = parse_rsshub_source_config(&source)?;
     if let Some(instance_id) = request
@@ -128,7 +129,7 @@ pub fn update_rsshub_source_instance(
     } else {
         config.instance_id = None;
     }
-    database.update_rsshub_source_config(source.id, &config)
+    Ok(database.update_rsshub_source_config(source.id, &config)?)
 }
 
 /// Preview extracted articles for a declarative XPath source.
@@ -136,13 +137,13 @@ pub fn update_rsshub_source_instance(
 pub async fn preview_xpath_source(
     request: PreviewXPathSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathPreview, String> {
+) -> Result<XPathPreview> {
     let url = request.url.trim();
     if url.is_empty() {
-        return Err("XPath source URL is required".to_string());
+        return Err("XPath source URL is required".into());
     }
     let selectors = apply_plugin_cookie(&database, request.selectors);
-    xpath_adapter::preview_xpath_source(url, &selectors).await
+    xpath_adapter::preview_xpath_source(url, &selectors).await.map_err(Into::into)
 }
 
 /// Preview extracted articles for a JSON API feed source.
@@ -150,10 +151,10 @@ pub async fn preview_xpath_source(
 pub async fn preview_json_api_source(
     request: PreviewXPathSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathPreview, String> {
+) -> Result<XPathPreview> {
     let url = request.url.trim();
     if url.is_empty() {
-        return Err("JSON feed URL is required".to_string());
+        return Err("JSON feed URL is required".into());
     }
     let cookie = resolve_json_cookie(&database, &request.selectors);
     let feed = json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
@@ -169,25 +170,25 @@ pub async fn preview_json_api_source(
 pub async fn add_xpath_source(
     request: AddXPathSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let url = request.url.trim();
     let title = request.title.trim();
     if url.is_empty() {
-        return Err("XPath source URL is required".to_string());
+        return Err("XPath source URL is required".into());
     }
     if title.is_empty() {
-        return Err("XPath source title is required".to_string());
+        return Err("XPath source title is required".into());
     }
 
     let selectors = apply_plugin_cookie(&database, request.selectors.clone());
     let feed = xpath_adapter::fetch_xpath_source(url, &selectors).await?;
     if feed.articles.is_empty() {
-        return Err("XPath selectors did not extract any articles".to_string());
+        return Err("XPath selectors did not extract any articles".into());
     }
 
     let source = database.add_xpath_source(url, title, &request.selectors)?;
     database.upsert_articles(source.id, Some(title), &feed.articles)?;
-    database.get_source(source.id)
+    Ok(database.get_source(source.id)?)
 }
 
 /// Add a JSON API feed source after validating it can extract articles.
@@ -195,25 +196,25 @@ pub async fn add_xpath_source(
 pub async fn add_json_api_source(
     request: AddXPathSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let url = request.url.trim();
     let title = request.title.trim();
     if url.is_empty() {
-        return Err("JSON feed URL is required".to_string());
+        return Err("JSON feed URL is required".into());
     }
     if title.is_empty() {
-        return Err("Source title is required".to_string());
+        return Err("Source title is required".into());
     }
 
     let cookie = resolve_json_cookie(&database, &request.selectors);
     let feed = json_adapter::fetch_json_feed(url, &request.selectors, cookie.as_deref()).await?;
     if feed.articles.is_empty() {
-        return Err("JSON selectors did not extract any articles".to_string());
+        return Err("JSON selectors did not extract any articles".into());
     }
 
     let source = database.add_json_api_source(url, title, &request.selectors)?;
     database.upsert_articles(source.id, Some(title), &feed.articles)?;
-    database.get_source(source.id)
+    Ok(database.get_source(source.id)?)
 }
 
 /// Update an XPath source after validating the new selectors against the same static page.
@@ -221,10 +222,10 @@ pub async fn add_json_api_source(
 pub async fn update_xpath_source(
     request: UpdateXPathSourceRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
+) -> Result<Source> {
     let source = database.get_source(request.source_id)?;
     if source.kind != SOURCE_KIND_XPATH && source.kind != SOURCE_KIND_JSON_API {
-        return Err("Selectors can only be updated for XPath and JSON API sources".to_string());
+        return Err("Selectors can only be updated for XPath and JSON API sources".into());
     }
 
     let is_json = source.kind == SOURCE_KIND_JSON_API;
@@ -233,15 +234,17 @@ pub async fn update_xpath_source(
         json_adapter::fetch_json_feed(&source.url, &request.selectors, cookie.as_deref()).await
     } else {
         let selectors = apply_plugin_cookie(&database, request.selectors.clone());
-        xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
+        xpath_adapter::fetch_xpath_source(&source.url, &selectors)
+            .await
+            .map_err(Into::into)
     }?;
     if feed.articles.is_empty() {
-        return Err("Selectors did not extract any articles".to_string());
+        return Err("Selectors did not extract any articles".into());
     }
 
     let source = database.update_xpath_source_config(source.id, &request.selectors)?;
     database.upsert_articles(source.id, Some(&source.title), &feed.articles)?;
-    database.get_source(source.id)
+    Ok(database.get_source(source.id)?)
 }
 
 /// Rename a source.
@@ -249,8 +252,8 @@ pub async fn update_xpath_source(
 pub fn update_source_title(
     request: UpdateSourceTitleRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
-    database.update_source_title(request.source_id, &request.title)
+) -> Result<Source> {
+    Ok(database.update_source_title(request.source_id, &request.title)?)
 }
 
 /// Set or clear a source's category folder.
@@ -259,8 +262,8 @@ pub fn set_source_category(
     source_id: i64,
     category: Option<String>,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Source, String> {
-    database.set_source_category(source_id, category.as_deref())
+) -> Result<Source> {
+    Ok(database.set_source_category(source_id, category.as_deref())?)
 }
 
 /// Delete a source and all of its articles.
@@ -268,8 +271,8 @@ pub fn set_source_category(
 pub fn delete_source(
     source_id: i64,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<(), String> {
-    database.delete_source(source_id)
+) -> Result<()> {
+    database.delete_source(source_id).map_err(Into::into)
 }
 
 /// Fetch a source and merge its latest articles into the local database.
@@ -277,21 +280,21 @@ pub fn delete_source(
 pub async fn refresh_source(
     source_id: i64,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<Article>, String> {
+) -> Result<Vec<Article>> {
     let source = database.get_source(source_id)?;
     refresh_source_record(&database, &source).await?;
-    database.list_articles(ArticleFilter {
+    Ok(database.list_articles(ArticleFilter {
         source_id: Some(source.id),
         unread_only: None,
         saved_only: None,
-    })
+    })?)
 }
 
 /// Refresh all enabled sources and return per-source status.
 #[tauri::command]
 pub async fn refresh_all_sources(
     database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<SourceRefreshResult>, String> {
+) -> Result<Vec<SourceRefreshResult>> {
     let sources = database.list_sources()?;
     let mut results = Vec::with_capacity(sources.len());
 
@@ -306,12 +309,12 @@ pub async fn refresh_all_sources(
                 });
             }
             Err(error) => {
-                database.record_source_error(source.id, &error)?;
+                database.record_source_error(source.id, &error.to_string())?;
                 results.push(SourceRefreshResult {
                     source_id: source.id,
                     ok: false,
                     article_count: 0,
-                    error: Some(error),
+                    error: Some(error.to_string()),
                 });
             }
         }
@@ -324,7 +327,7 @@ pub async fn refresh_all_sources(
 pub(crate) async fn refresh_source_record(
     database: &AppDatabase,
     source: &Source,
-) -> Result<usize, String> {
+) -> Result<usize> {
     let feed = match source.kind.as_str() {
         SOURCE_KIND_RSS => feed_adapter::fetch_feed(&source.url).await,
         SOURCE_KIND_RSSHUB => {
@@ -335,14 +338,16 @@ pub(crate) async fn refresh_source_record(
         }
         SOURCE_KIND_XPATH => {
             let selectors = apply_plugin_cookie(database, parse_xpath_selectors(source)?);
-            xpath_adapter::fetch_xpath_source(&source.url, &selectors).await
+            xpath_adapter::fetch_xpath_source(&source.url, &selectors)
+                .await
+                .map_err(Into::into)
         }
         SOURCE_KIND_JSON_API => {
             let selectors = parse_xpath_selectors(source)?;
             let cookie = resolve_json_cookie(database, &selectors);
             json_adapter::fetch_json_feed(&source.url, &selectors, cookie.as_deref()).await
         }
-        kind => Err(format!("Source kind '{kind}' is not refreshable yet")),
+        kind => Err(format!("Source kind '{kind}' is not refreshable yet").into()),
     };
 
     match feed {
@@ -356,26 +361,26 @@ pub(crate) async fn refresh_source_record(
             Ok(article_count)
         }
         Err(error) => {
-            database.record_source_error(source.id, &error)?;
+            database.record_source_error(source.id, &error.to_string())?;
             Err(error)
         }
     }
 }
 
-fn parse_rsshub_source_config(source: &Source) -> Result<RssHubSourceConfig, String> {
+fn parse_rsshub_source_config(source: &Source) -> Result<RssHubSourceConfig> {
     let config = source
         .config_json
         .as_deref()
         .ok_or_else(|| format!("RSSHub source '{}' has no route config", source.title))?;
-    serde_json::from_str(config).map_err(|error| error.to_string())
+    serde_json::from_str(config).map_err(Into::into)
 }
 
-fn parse_xpath_selectors(source: &Source) -> Result<XPathSelectors, String> {
+fn parse_xpath_selectors(source: &Source) -> Result<XPathSelectors> {
     let config = source
         .config_json
         .as_deref()
         .ok_or_else(|| format!("XPath source '{}' has no selector config", source.title))?;
-    serde_json::from_str(config).map_err(|error| error.to_string())
+    serde_json::from_str(config).map_err(Into::into)
 }
 
 /// Resolve the cookie for a JSON API feed: source override first, then plugin credential fallback.

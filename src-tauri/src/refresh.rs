@@ -7,6 +7,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::commands::sources::refresh_source_record;
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{AutoRefreshConfig, RefreshTickEvent, Source};
 
 pub(crate) const DEFAULT_REFRESH_INTERVAL: i64 = 1800; // 30 minutes
@@ -203,7 +204,7 @@ fn extract_plugin_id(source: &Source) -> Option<String> {
 pub async fn get_auto_refresh_config(
     database: tauri::State<'_, AppDatabase>,
     scheduler: tauri::State<'_, RefreshScheduler>,
-) -> Result<AutoRefreshConfig, String> {
+) -> Result<AutoRefreshConfig> {
     let enabled = scheduler.is_enabled().await;
     let global_interval_seconds = scheduler.get_global_interval().await;
     let plugin_overrides = database.list_plugin_refresh_overrides()?;
@@ -221,9 +222,9 @@ pub async fn set_global_refresh_interval(
     database: tauri::State<'_, AppDatabase>,
     scheduler: tauri::State<'_, RefreshScheduler>,
     app_handle: tauri::AppHandle,
-) -> Result<AutoRefreshConfig, String> {
+) -> Result<AutoRefreshConfig> {
     if seconds < 60 {
-        return Err("Refresh interval must be at least 60 seconds".to_string());
+        return Err("Refresh interval must be at least 60 seconds".into());
     }
     database.set_setting("global_refresh_interval", &seconds.to_string())?;
     scheduler.set_global_interval(seconds).await;
@@ -238,9 +239,9 @@ pub async fn set_plugin_refresh_interval(
     database: tauri::State<'_, AppDatabase>,
     scheduler: tauri::State<'_, RefreshScheduler>,
     app_handle: tauri::AppHandle,
-) -> Result<AutoRefreshConfig, String> {
+) -> Result<AutoRefreshConfig> {
     if seconds < 60 {
-        return Err("Refresh interval must be at least 60 seconds".to_string());
+        return Err("Refresh interval must be at least 60 seconds".into());
     }
     database.set_plugin_refresh_interval(&plugin_id, seconds)?;
     scheduler.restart(app_handle).await;
@@ -254,10 +255,10 @@ pub async fn set_source_refresh_interval(
     database: tauri::State<'_, AppDatabase>,
     scheduler: tauri::State<'_, RefreshScheduler>,
     app_handle: tauri::AppHandle,
-) -> Result<AutoRefreshConfig, String> {
+) -> Result<AutoRefreshConfig> {
     if let Some(secs) = seconds {
         if secs < 60 {
-            return Err("Refresh interval must be at least 60 seconds".to_string());
+            return Err("Refresh interval must be at least 60 seconds".into());
         }
     }
     database.set_source_refresh_interval(source_id, seconds)?;
@@ -271,7 +272,7 @@ pub async fn set_auto_refresh_enabled(
     database: tauri::State<'_, AppDatabase>,
     scheduler: tauri::State<'_, RefreshScheduler>,
     app_handle: tauri::AppHandle,
-) -> Result<AutoRefreshConfig, String> {
+) -> Result<AutoRefreshConfig> {
     database.set_setting(
         "auto_refresh_enabled",
         if enabled { "true" } else { "false" },

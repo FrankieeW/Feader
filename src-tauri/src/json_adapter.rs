@@ -10,6 +10,7 @@ use std::time::Duration;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::error::Result;
 use crate::models::{ParsedArticle, ParsedFeed, XPathSelectors};
 
 const JSON_FETCH_TIMEOUT_SECONDS: u64 = 20;
@@ -40,19 +41,18 @@ pub async fn fetch_json_feed(
     url: &str,
     selectors: &XPathSelectors,
     cookie: Option<&str>,
-) -> Result<ParsedFeed, String> {
+) -> Result<ParsedFeed> {
     let max_items = selectors.max_items.unwrap_or(40);
     let mut items: Vec<Value> = Vec::new();
     let mut current_url = url.to_string();
 
     for _ in 0..MAX_JSON_PAGES {
         let body = fetch_json_with_cookie(&current_url, cookie).await?;
-        let root: Value =
-            serde_json::from_str(&body).map_err(|e| format!("Failed to parse JSON: {e}"))?;
+        let root: Value = serde_json::from_str(&body)?;
 
         // Check Weibo error code
         if root.get("ok").and_then(|v| v.as_i64()) == Some(-100) {
-            return Err("Weibo returned ok=-100: login cookies required or expired".to_string());
+            return Err("Weibo returned ok=-100: login cookies required or expired".into());
         }
 
         let page_items = extract_items(&root, &selectors.items)?;
@@ -103,11 +103,10 @@ pub async fn fetch_json_feed(
     })
 }
 
-async fn fetch_json_with_cookie(url: &str, cookie: Option<&str>) -> Result<String, String> {
+async fn fetch_json_with_cookie(url: &str, cookie: Option<&str>) -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(JSON_FETCH_TIMEOUT_SECONDS))
-        .build()
-        .map_err(|e| e.to_string())?;
+        .build()?;
 
     let mut req = client.get(url);
 
@@ -127,16 +126,16 @@ async fn fetch_json_with_cookie(url: &str, cookie: Option<&str>) -> Result<Strin
         req = req.header("Cookie", c);
     }
 
-    let resp = req.send().await.map_err(|e| format!("Fetch failed: {e}"))?;
+    let resp = req.send().await?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(format!("HTTP {}", resp.status()).into());
     }
-    resp.text().await.map_err(|e| format!("Read body: {e}"))
+    resp.text().await.map_err(Into::into)
 }
 
 /// Extract items from JSON using a path with optional filter.
 /// Path format: "data.cards[?(@.card_type==9)]" or "data.cards"
-fn extract_items(root: &Value, path: &str) -> Result<Vec<Value>, String> {
+fn extract_items(root: &Value, path: &str) -> Result<Vec<Value>> {
     let (base_path, filter) = if let Some(idx) = path.find("[?(@.") {
         let base = &path[..idx];
         let filter_part = &path[idx..];
@@ -147,8 +146,8 @@ fn extract_items(root: &Value, path: &str) -> Result<Vec<Value>, String> {
 
     let arr = match resolve_json_path(root, base_path) {
         Some(Value::Array(a)) => a.clone(),
-        Some(_) => return Err(format!("Path '{}' did not resolve to an array", base_path)),
-        None => return Err(format!("Path '{}' not found in response", base_path)),
+        Some(_) => return Err(format!("Path '{}' did not resolve to an array", base_path).into()),
+        None => return Err(format!("Path '{}' not found in response", base_path).into()),
     };
 
     match filter {

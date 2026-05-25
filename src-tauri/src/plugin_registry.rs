@@ -14,6 +14,7 @@ use crate::models::{
     PLUGIN_KIND_APP_UI_THEME, PLUGIN_KIND_DETAIL_VIEW, PLUGIN_KIND_JSON_API_FEED,
     PLUGIN_KIND_SOURCE_LIST_VIEW, PLUGIN_KIND_XPATH,
 };
+use crate::error::Result;
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
@@ -92,21 +93,20 @@ fn candidate_matches(document: &str, candidate: &XPathRuleCandidate) -> bool {
 
 pub async fn fetch_registry_index_from_market(
     market: &PluginMarket,
-) -> Result<RegistryIndex, String> {
+) -> Result<RegistryIndex> {
     fetch_registry_index_from_base(&market.raw_base_url).await
 }
 
-async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIndex, String> {
+async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIndex> {
     let url = format!("{}/registry/index.json", raw_base_url.trim_end_matches('/'));
     let body = fetch_text_limited(&url, REGISTRY_INDEX_BYTE_CAP, "registry index").await?;
 
-    let index = serde_json::from_str::<RegistryIndex>(&body)
-        .map_err(|error| format!("Failed to parse registry index: {error}"))?;
+    let index = serde_json::from_str::<RegistryIndex>(&body)?;
     if index.schema_version != "feader-registry/v1" {
         return Err(format!(
             "Unsupported registry schema '{}'",
             index.schema_version
-        ));
+        ).into());
     }
     Ok(index)
 }
@@ -114,7 +114,7 @@ async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIn
 pub async fn fetch_remote_plugin_pack_from_market(
     market: &PluginMarket,
     entry: &RegistryPluginEntry,
-) -> Result<XPathRulePack, String> {
+) -> Result<XPathRulePack> {
     fetch_remote_plugin_pack_from_base(
         entry,
         &market.raw_base_url,
@@ -137,12 +137,12 @@ async fn fetch_remote_plugin_pack_from_base(
     raw_base_url: &str,
     registry: &str,
     trust: &str,
-) -> Result<XPathRulePack, String> {
+) -> Result<XPathRulePack> {
     if !is_supported_registry_kind(&entry.kind) {
         return Err(format!(
             "Plugin {} has unsupported kind '{}'",
             entry.id, entry.kind
-        ));
+        ).into());
     }
     let expected_sha = entry
         .sha256
@@ -225,11 +225,11 @@ async fn fetch_remote_plugin_pack_from_base(
     })
 }
 
-pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack, String> {
+pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
     let normalized_url = normalize_plugin_file_url(url)?;
     let url = normalized_url.as_str();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("Plugin URL must start with http:// or https://".to_string());
+        return Err("Plugin URL must start with http:// or https://".into());
     }
     let body = fetch_text_limited(url, PLUGIN_FILE_BYTE_CAP, "plugin URL").await?;
     if let Ok(pack) = serde_json::from_str::<RemoteXPathRulePack>(&body) {
@@ -294,7 +294,7 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack, Stri
     })
 }
 
-fn normalize_plugin_file_url(url: &str) -> Result<String, String> {
+fn normalize_plugin_file_url(url: &str) -> Result<String> {
     let trimmed = url.trim();
     if !trimmed.starts_with("https://github.com/") {
         return Ok(trimmed.to_string());
@@ -316,7 +316,7 @@ fn normalize_plugin_file_url(url: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String, String> {
+async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REGISTRY_FETCH_TIMEOUT_SECONDS))
         .build()
@@ -329,7 +329,7 @@ async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String
         .map_err(|error| format!("Failed to fetch {label}: {error}"))?;
 
     if !response.status().is_success() {
-        return Err(format!("{label} returned HTTP {}", response.status()));
+        return Err(format!("{label} returned HTTP {}", response.status()).into());
     }
 
     let bytes = response
@@ -337,19 +337,19 @@ async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String
         .await
         .map_err(|error| format!("Failed to read {label} body: {error}"))?;
     if bytes.len() > cap {
-        return Err(format!("{label} exceeded {} bytes", cap));
+        return Err(format!("{label} exceeded {} bytes", cap).into());
     }
-    String::from_utf8(bytes.to_vec()).map_err(|error| format!("{label} was not UTF-8: {error}"))
+    Ok(String::from_utf8(bytes.to_vec()).map_err(|error| format!("{label} was not UTF-8: {error}"))?)
 }
 
-fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str, String> {
+fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str> {
     let trimmed = path.trim();
     if trimmed.is_empty()
         || trimmed.starts_with('/')
         || trimmed.contains("://")
         || trimmed.split('/').any(|part| part == "..")
     {
-        return Err(format!("Invalid {label} path '{path}'"));
+        return Err(format!("Invalid {label} path '{path}'").into());
     }
     Ok(trimmed)
 }
@@ -357,30 +357,30 @@ fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str, Str
 fn validate_manifest(
     entry: &RegistryPluginEntry,
     manifest: &RemotePluginManifest,
-) -> Result<(), String> {
+) -> Result<()> {
     if manifest.id != entry.id {
         return Err(format!(
             "Manifest id '{}' does not match registry id '{}'",
             manifest.id, entry.id
-        ));
+        ).into());
     }
     if manifest.version != entry.version {
         return Err(format!(
             "Manifest version '{}' does not match registry version '{}'",
             manifest.version, entry.version
-        ));
+        ).into());
     }
     if manifest.name != entry.name {
         return Err(format!(
             "Manifest name '{}' does not match registry name '{}'",
             manifest.name, entry.name
-        ));
+        ).into());
     }
     if !is_supported_registry_kind(&manifest.kind) {
         return Err(format!(
             "Manifest kind '{}' is not supported",
             manifest.kind
-        ));
+        ).into());
     }
     let expected_api_version = expected_api_version_for_kind(&manifest.kind)
         .ok_or_else(|| format!("Manifest kind '{}' is not supported", manifest.kind))?;
@@ -388,7 +388,7 @@ fn validate_manifest(
         return Err(format!(
             "Manifest API version '{}' is not supported",
             manifest.feader_api_version
-        ));
+        ).into());
     }
     Ok(())
 }
@@ -397,21 +397,21 @@ fn validate_view_plugin(
     entry: &RegistryPluginEntry,
     manifest: &RemotePluginManifest,
     pack: &RemoteViewPlugin,
-) -> Result<(), String> {
+) -> Result<()> {
     if pack.schema_version != VIEW_PLUGIN_API_VERSION {
         return Err(format!(
             "View plugin schema '{}' is not supported",
             pack.schema_version
-        ));
+        ).into());
     }
     if pack.id != entry.id || pack.id != manifest.id {
-        return Err("View plugin id does not match manifest or registry".to_string());
+        return Err("View plugin id does not match manifest or registry".into());
     }
     if pack.name != entry.name || pack.name != manifest.name {
-        return Err("View plugin name does not match manifest or registry".to_string());
+        return Err("View plugin name does not match manifest or registry".into());
     }
     if pack.version != entry.version || pack.version != manifest.version {
-        return Err("View plugin version does not match manifest or registry".to_string());
+        return Err("View plugin version does not match manifest or registry".into());
     }
     let expected_slot = match manifest.kind.as_str() {
         APP_UI_THEME_KIND => "app-ui",
@@ -421,14 +421,14 @@ fn validate_view_plugin(
             return Err(format!(
                 "View plugin kind '{}' is not supported",
                 manifest.kind
-            ))
+            ).into());
         }
     };
     if pack.slot != expected_slot {
         return Err(format!(
             "View plugin slot '{}' does not match kind '{}'",
             pack.slot, manifest.kind
-        ));
+        ).into());
     }
     Ok(())
 }
@@ -456,40 +456,40 @@ fn validate_rule_pack(
     entry: &RegistryPluginEntry,
     manifest: &RemotePluginManifest,
     pack: &RemoteXPathRulePack,
-) -> Result<(), String> {
+) -> Result<()> {
     if pack.schema_version != STATIC_XPATH_API_VERSION {
         return Err(format!(
             "Rule pack schema '{}' is not supported",
             pack.schema_version
-        ));
+        ).into());
     }
     if pack.id != manifest.id || pack.id != entry.id {
         return Err(format!(
             "Rule pack id '{}' does not match manifest",
             pack.id
-        ));
+        ).into());
     }
     if pack.version != manifest.version {
         return Err(format!(
             "Rule pack version '{}' does not match manifest version '{}'",
             pack.version, manifest.version
-        ));
+        ).into());
     }
     Ok(())
 }
 
-fn validate_standalone_rule_pack(pack: &RemoteXPathRulePack) -> Result<(), String> {
+fn validate_standalone_rule_pack(pack: &RemoteXPathRulePack) -> Result<()> {
     if pack.schema_version != STATIC_XPATH_API_VERSION {
         return Err(format!(
             "Rule pack schema '{}' is not supported",
             pack.schema_version
-        ));
+        ).into());
     }
     if pack.id.trim().is_empty() || pack.name.trim().is_empty() || pack.version.trim().is_empty() {
-        return Err("Rule pack id, name, and version are required".to_string());
+        return Err("Rule pack id, name, and version are required".into());
     }
     if pack.candidates.is_empty() {
-        return Err("Rule pack must include at least one candidate".to_string());
+        return Err("Rule pack must include at least one candidate".into());
     }
     Ok(())
 }
@@ -497,7 +497,7 @@ fn validate_standalone_rule_pack(pack: &RemoteXPathRulePack) -> Result<(), Strin
 fn validate_direct_manifest_and_pack(
     manifest: &RemotePluginManifest,
     pack: &RemoteXPathRulePack,
-) -> Result<(), String> {
+) -> Result<()> {
     let entry = RegistryPluginEntry {
         id: manifest.id.clone(),
         name: manifest.name.clone(),
@@ -518,13 +518,13 @@ fn plugin_capabilities(candidates: &[XPathRuleCandidate]) -> Vec<String> {
     caps
 }
 
-fn verify_sha256(body: &str, expected: &str, plugin_id: &str) -> Result<(), String> {
+fn verify_sha256(body: &str, expected: &str, plugin_id: &str) -> Result<()> {
     let digest = Sha256::digest(body.as_bytes());
     let actual = hex::encode(digest);
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(format!(
             "Plugin {plugin_id} checksum mismatch: expected {expected}, got {actual}"
-        ));
+        ).into());
     }
     Ok(())
 }
