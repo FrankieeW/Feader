@@ -1,6 +1,6 @@
 [package]
 name = "feader"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-native, Web3-friendly RSS reader"
 authors = ["Frankie"]
 edition = "2021"
