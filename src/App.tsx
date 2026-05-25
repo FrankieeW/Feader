@@ -75,7 +75,7 @@ type ViewMode = "reader" | "sources" | "hub" | "settings";
 type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
-type AppUiPluginId = "editorial" | "terminal" | "calm" | "cyberpunk";
+type AppUiPluginId = string;
 type AppUiThemeByMode = { light: AppUiPluginId | null; dark: AppUiPluginId | null };
 type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
 type DetailViewPluginId = "magazine" | "focus" | "research" | "cinema";
@@ -289,10 +289,12 @@ type XPathRulePack = {
   authors?: PluginAuthor[];
   parameters?: PluginParameters | null;
   auth?: PluginAuth | null;
+  tokens?: Record<string, string> | null;
 };
 
 type MarketplacePluginPack = XPathRulePack & {
   installed: boolean;
+  installedVersion?: string | null;
   sourceMarketId?: string | null;
   sourceMarketName?: string | null;
   sourceMarketRepository?: string | null;
@@ -386,6 +388,7 @@ type ViewPluginDefinition<T extends string> = {
   name: string;
   description: string;
   capability: string;
+  tokens?: Record<string, string> | null;
 };
 
 const defaultXPathSelectors: XPathSelectors = {
@@ -448,6 +451,7 @@ const entryLayoutStorageKey = "feader.entryLayout";
 const appUiThemeByModeStorageKey = "feader.theme.appUiByMode";
 const detailViewPluginStorageKey = "feader.plugin.detailView";
 const installedViewPluginsStorageKey = "feader.plugin.installedViews";
+const installedViewPluginVersionsStorageKey = "feader.plugin.installedViewVersions";
 const sourceListViewBySourceStorageKey = "feader.sourceListView.bySource";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
@@ -463,33 +467,6 @@ const paneBounds: Record<PaneKey, { min: number; max: number }> = {
   sidebar: { min: 220, max: 300 },
   timeline: { min: 360, max: 620 },
 };
-
-const appUiPlugins: ViewPluginDefinition<AppUiPluginId>[] = [
-  {
-    id: "editorial",
-    name: "Editorial Desk",
-    description: "Warmer panels, stronger masthead contrast, and print-desk rhythm across the app.",
-    capability: "app.theme",
-  },
-  {
-    id: "terminal",
-    name: "Terminal Ops",
-    description: "A dark operational shell with high-contrast surfaces for long source triage sessions.",
-    capability: "app.theme",
-  },
-  {
-    id: "calm",
-    name: "Calm Glass",
-    description: "Soft blue-green chrome and lighter panels for a quieter daily reading workspace.",
-    capability: "app.theme",
-  },
-  {
-    id: "cyberpunk",
-    name: "Cyberpunk UI Theme",
-    description: "Official FeaderHub neon shell template for high-contrast source work.",
-    capability: "app.theme",
-  },
-];
 
 const sourceListPlugins: ViewPluginDefinition<SourceListPluginId>[] = [
   {
@@ -1435,6 +1412,9 @@ function App() {
   const [installedViewPlugins, setInstalledViewPlugins] = useState<string[]>(() =>
     readInitialInstalledViewPlugins(),
   );
+  const [installedViewPluginVersions, setInstalledViewPluginVersions] = useState<
+    Record<string, string>
+  >(() => readInitialInstalledViewPluginVersions());
   const [sourceListViewBySource, setSourceListViewBySource] = useState<Record<string, string>>(() =>
     readInitialSourceListViewBySource(),
   );
@@ -1581,6 +1561,13 @@ function App() {
       current && !installedViewPlugins.includes(current) ? null : current,
     );
   }, [installedViewPlugins]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      installedViewPluginVersionsStorageKey,
+      JSON.stringify(installedViewPluginVersions),
+    );
+  }, [installedViewPluginVersions]);
 
   useEffect(() => {
     localStorage.setItem(sourceListViewBySourceStorageKey, JSON.stringify(sourceListViewBySource));
@@ -1882,6 +1869,25 @@ function App() {
     });
   }
 
+  async function handleUpdatePlugin(pack: MarketplacePluginPack): Promise<void> {
+    if (isViewPluginPack(pack)) {
+      handleInstallViewPlugin(pack);
+      setStatus(`Updated view plugin: ${pack.name}`);
+      return;
+    }
+    if (!pack.sourceMarketId) {
+      setStatus("Bundled plugin is already current");
+      return;
+    }
+    await runTask("Updating plugin", async () => {
+      await invoke<XPathRulePack>("install_plugin_from_market", {
+        request: { marketId: pack.sourceMarketId, pluginId: pack.id },
+      });
+      await loadXPathPluginPacks(false);
+      setStatus(`Updated plugin: ${pack.name}`);
+    });
+  }
+
   async function handleUninstallPlugin(pack: MarketplacePluginPack): Promise<void> {
     if (isViewPluginPack(pack)) {
       handleUninstallViewPlugin(pack);
@@ -1899,12 +1905,17 @@ function App() {
     setInstalledViewPlugins((current) =>
       current.includes(pluginId) ? current : [...current, pluginId],
     );
+    setInstalledViewPluginVersions((current) => ({ ...current, [pluginId]: pack.version }));
     setStatus(`Installed view plugin: ${pack.name}`);
   }
 
   function handleUninstallViewPlugin(pack: MarketplacePluginPack): void {
     const pluginId = viewPluginIdFromPack(pack);
     setInstalledViewPlugins((current) => current.filter((id) => id !== pluginId));
+    setInstalledViewPluginVersions((current) => {
+      const { [pluginId]: _removed, ...next } = current;
+      return next;
+    });
     setStatus(`Uninstalled view plugin: ${pack.name}`);
   }
 
@@ -1917,6 +1928,21 @@ function App() {
       return isViewPluginInstalled(pack) ? "Uninstall" : "Install";
     }
     return pack.installed ? "Add Source" : "Install";
+  }
+
+  function pluginInstalledVersion(pack: MarketplacePluginPack): string | null {
+    if (isViewPluginPack(pack)) {
+      return installedViewPluginVersions[viewPluginIdFromPack(pack)] ?? null;
+    }
+    return pack.installedVersion ?? null;
+  }
+
+  function pluginHasUpdate(pack: MarketplacePluginPack): boolean {
+    const installedVersion = pluginInstalledVersion(pack);
+    if (!installedVersion) {
+      return isViewPluginPack(pack) && isViewPluginInstalled(pack) && Boolean(pack.sourceMarketId);
+    }
+    return comparePluginVersions(pack.version, installedVersion) > 0;
   }
 
   async function handleAddPluginMarket(): Promise<void> {
@@ -2488,21 +2514,28 @@ function App() {
     }
   }
 
-  const shellStyle = {
-    "--sidebar-width": `${paneWidths.sidebar}px`,
-    "--timeline-width": `${paneWidths.timeline}px`,
-  } as CSSProperties;
   const currentSourceKey = String(selectedSourceId ?? "all");
   const storedListView = sourceListViewBySource[currentSourceKey] ?? entryLayout;
   const effectiveListView =
     isSourceListPluginId(storedListView) && !installedViewPlugins.includes(storedListView)
       ? "list"
       : storedListView;
+  const appUiPluginOptions = useMemo(
+    () => viewPluginDefinitionsForKind(xpathRulePacks, "app-ui-theme"),
+    [xpathRulePacks],
+  );
   const installedSourceListPlugins = useMemo(
     () => sourceListPlugins.filter((plugin) => installedViewPlugins.includes(plugin.id)),
     [installedViewPlugins],
   );
-  const resolvedAppUiTheme = appUiThemeByMode[resolveThemeMode(themeMode)];
+  const resolvedThemeMode = resolveThemeMode(themeMode);
+  const resolvedAppUiTheme = appUiThemeByMode[resolvedThemeMode];
+  const resolvedAppUiPlugin = appUiPluginOptions.find((plugin) => plugin.id === resolvedAppUiTheme);
+  const shellStyle = {
+    "--sidebar-width": `${paneWidths.sidebar}px`,
+    "--timeline-width": `${paneWidths.timeline}px`,
+    ...cssVariablesFromAppUiTokens(resolvedAppUiPlugin?.tokens),
+  } as CSSProperties;
 
   function handleSelectListView(choice: string): void {
     setSourceListViewBySource((current) => ({ ...current, [currentSourceKey]: choice }));
@@ -2523,7 +2556,7 @@ function App() {
         activeView={activeView}
         onSelectView={setActiveView}
         themeMode={themeMode}
-        onCycleTheme={() => setThemeMode((mode) => nextThemeMode(mode))}
+        onToggleTheme={() => setThemeMode((mode) => oppositeResolvedThemeMode(mode))}
       />
       <datalist id={categoryDatalistId}>
         {categoryOptions.map((category) => (
@@ -3136,9 +3169,20 @@ function App() {
                               ? openPluginDialog(pack)
                               : void handleInstallPlugin(pack)
                         }
+                        type="button"
                       >
                         {pluginActionLabel(pack)}
                       </button>
+                      {pluginHasUpdate(pack) ? (
+                        <button
+                          className="hub-update-btn"
+                          disabled={isBusy}
+                          onClick={() => void handleUpdatePlugin(pack)}
+                          type="button"
+                        >
+                          Update
+                        </button>
+                      ) : null}
                     </div>
                   </article>
                 ))}
@@ -3201,9 +3245,20 @@ function App() {
                               ? openPluginDialog(pack)
                               : void handleInstallPlugin(pack)
                         }
+                        type="button"
                       >
                         {pluginActionLabel(pack)}
                       </button>
+                      {pluginHasUpdate(pack) ? (
+                        <button
+                          className="hub-update-btn"
+                          disabled={isBusy}
+                          onClick={() => void handleUpdatePlugin(pack)}
+                          type="button"
+                        >
+                          Update
+                        </button>
+                      ) : null}
                       {pack.installed && !pack.trust.includes("bundled") && !isViewPluginPack(pack) ? (
                         <button
                           className="hub-remove-btn"
@@ -3528,7 +3583,7 @@ function App() {
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Appearance</span>
-                <span>{themeLabel(themeMode)}</span>
+                <span>{themeStatusLabel(themeMode)}</span>
               </div>
               <ThemeControl mode={themeMode} onChange={setThemeMode} />
             </article>
@@ -3601,6 +3656,7 @@ function App() {
 
             <PluginSwitchboard
               appUiThemeByMode={appUiThemeByMode}
+              appUiPlugins={appUiPluginOptions}
               detailViewPlugin={detailViewPlugin}
               installedViewPlugins={installedViewPlugins}
               onActivateDetailView={setDetailViewPlugin}
@@ -3774,13 +3830,15 @@ function IconRail({
   activeView,
   onSelectView,
   themeMode,
-  onCycleTheme,
+  onToggleTheme,
 }: {
   activeView: ViewMode;
   onSelectView: (view: ViewMode) => void;
   themeMode: ThemeMode;
-  onCycleTheme: () => void;
+  onToggleTheme: () => void;
 }) {
+  const resolvedTheme = resolveThemeMode(themeMode);
+
   return (
     <nav className="icon-rail" aria-label="Primary">
       <span className="rail-mark" aria-hidden="true">F</span>
@@ -3798,12 +3856,12 @@ function IconRail({
       ))}
       <span className="rail-spacer" />
       <button
-        aria-label={`Theme: ${themeLabel(themeMode)}`}
+        aria-label={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} theme`}
         className="rail-button"
-        onClick={onCycleTheme}
+        onClick={onToggleTheme}
         type="button"
       >
-        {railIcon("theme")}
+        {railIcon(resolvedTheme === "dark" ? "light-theme" : "dark-theme")}
       </button>
       <button
         aria-current={activeView === "settings" ? "page" : undefined}
@@ -3818,12 +3876,13 @@ function IconRail({
   );
 }
 
-function railIcon(name: ViewMode | "theme") {
+function railIcon(name: ViewMode | "light-theme" | "dark-theme") {
   const paths: Record<string, string> = {
     reader: "M4 6h16M4 12h16M4 18h11",
     sources: "M4 4h16v16H4zM4 9.5h16",
     hub: "M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5",
-    theme: "M12 7a5 5 0 100 10 5 5 0 000-10zM12 2v2M12 20v2M2 12h2M20 12h2",
+    "light-theme": "M12 3v2M12 19v2M5.64 5.64l1.42 1.42M16.94 16.94l1.42 1.42M3 12h2M19 12h2M5.64 18.36l1.42-1.42M16.94 7.06l1.42-1.42M12 8a4 4 0 100 8 4 4 0 000-8z",
+    "dark-theme": "M21 13.2A7.8 7.8 0 1110.8 3a6.3 6.3 0 0010.2 10.2z",
     settings: "M12 9a3 3 0 100 6 3 3 0 000-6zM12 2v3M12 19v3M2 12h3M19 12h3",
   };
   return (
@@ -3833,14 +3892,8 @@ function railIcon(name: ViewMode | "theme") {
   );
 }
 
-function nextThemeMode(mode: ThemeMode): ThemeMode {
-  if (mode === "light") {
-    return "dark";
-  }
-  if (mode === "dark") {
-    return "system";
-  }
-  return "light";
+function oppositeResolvedThemeMode(mode: ThemeMode): Exclude<ThemeMode, "system"> {
+  return resolveThemeMode(mode) === "dark" ? "light" : "dark";
 }
 
 function ThemeControl({
@@ -3850,18 +3903,34 @@ function ThemeControl({
   mode: ThemeMode;
   onChange: (mode: ThemeMode) => void;
 }) {
+  const resolvedMode = resolveThemeMode(mode);
+  const isFollowingSystem = mode === "system";
+
   return (
-    <div className="theme-control" role="group" aria-label="Theme">
-      {(["light", "dark", "system"] as const).map((theme) => (
-        <button
-          className={mode === theme ? "active" : ""}
-          key={theme}
-          onClick={() => onChange(theme)}
-          type="button"
-        >
-          {themeLabel(theme)}
-        </button>
-      ))}
+    <div className="theme-control">
+      <button
+        aria-label={`Switch to ${resolvedMode === "dark" ? "light" : "dark"} theme`}
+        aria-pressed={resolvedMode === "dark"}
+        className={`theme-switch ${resolvedMode === "dark" ? "dark" : "light"}`}
+        onClick={() => onChange(oppositeResolvedThemeMode(mode))}
+        type="button"
+      >
+        <span className="theme-switch-option">Light</span>
+        <span className="theme-switch-option">Dark</span>
+        <span className="theme-switch-thumb" aria-hidden="true">
+          {resolvedMode === "dark" ? "Dark" : "Light"}
+        </span>
+      </button>
+      <label className={`system-theme-toggle ${isFollowingSystem ? "active" : ""}`}>
+        <input
+          checked={isFollowingSystem}
+          onChange={(event) => {
+            onChange(event.target.checked ? "system" : resolvedMode);
+          }}
+          type="checkbox"
+        />
+        <span>Follow system</span>
+      </label>
     </div>
   );
 }
@@ -4708,12 +4777,14 @@ function ReaderTypographyControl({
 
 function PluginSwitchboard({
   appUiThemeByMode,
+  appUiPlugins,
   detailViewPlugin,
   installedViewPlugins,
   onActivateDetailView,
   onAssignTheme,
 }: {
   appUiThemeByMode: AppUiThemeByMode;
+  appUiPlugins: ViewPluginDefinition<AppUiPluginId>[];
   detailViewPlugin: DetailViewPluginId | null;
   installedViewPlugins: string[];
   onActivateDetailView: (plugin: DetailViewPluginId | null) => void;
@@ -4984,6 +5055,11 @@ function themeLabel(mode: ThemeMode): string {
   return "System";
 }
 
+function themeStatusLabel(mode: ThemeMode): string {
+  const resolved = themeLabel(resolveThemeMode(mode));
+  return mode === "system" ? `System / ${resolved}` : resolved;
+}
+
 function viewLabel(mode: ViewMode): string {
   if (mode === "reader") {
     return "Reader";
@@ -5102,12 +5178,15 @@ function appUiPluginFromPack(pack: { id: string }): AppUiPluginId {
   if (pack.id === "official.cyberpunk-ui.view") {
     return "cyberpunk";
   }
-  return "terminal";
+  return pack.id;
 }
 
 function sourceListPluginFromPack(pack: { id: string }): SourceListPluginId {
   if (pack.id === "official.social-source-list.view") {
     return "social-stream";
+  }
+  if (pack.id === "official.dense-radar-source-list.view") {
+    return "dense-radar";
   }
   return "image-board";
 }
@@ -5115,6 +5194,12 @@ function sourceListPluginFromPack(pack: { id: string }): SourceListPluginId {
 function detailViewPluginFromPack(pack: { id: string }): DetailViewPluginId {
   if (pack.id === "official.cinema-detail.view") {
     return "cinema";
+  }
+  if (pack.id === "official.focus-detail.view") {
+    return "focus";
+  }
+  if (pack.id === "official.research-detail.view") {
+    return "research";
   }
   return "magazine";
 }
@@ -5132,50 +5217,74 @@ function viewPluginIdFromPack(pack: { id: string; kind: string }): string {
   return detailViewPluginFromPack(pack);
 }
 
-const officialViewPluginAuthors: PluginAuthor[] = [
-  {
-    name: "Frankie Wang",
-    evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
-    avatarUrl: "https://github.com/FrankieeW.png",
-    website: "https://github.com/FrankieeW",
-    email: "git@frankie.wang",
-    githubId: "FrankieeW",
-  },
-];
-
-function buildBuiltinViewPack(
-  plugin: ViewPluginDefinition<string>,
-  kind: string,
-): MarketplacePluginPack {
-  return {
-    id: `view.${plugin.id}`,
-    name: plugin.name,
-    version: "1.0.0",
-    apiVersion: "feader-view-plugin/v1",
-    kind,
-    registry: "https://github.com/FrankieeW/FeaderHub",
-    trust: "official",
-    description: plugin.description,
-    logo: null,
-    capabilities: [plugin.capability],
-    candidates: [],
-    authors: officialViewPluginAuthors,
-    installed: true,
-    sourceMarketId: null,
-  };
-}
-
-function buildBuiltinViewPacks(): MarketplacePluginPack[] {
-  return [
-    ...appUiPlugins.map((plugin) => buildBuiltinViewPack(plugin, "app-ui-theme")),
-    ...sourceListPlugins.map((plugin) => buildBuiltinViewPack(plugin, "source-list-view")),
-    ...detailViewPlugins.map((plugin) => buildBuiltinViewPack(plugin, "detail-view")),
-  ];
-}
-
 function withBuiltinViewPacks(packs: MarketplacePluginPack[]): MarketplacePluginPack[] {
-  const nonViewPacks = packs.filter((pack) => !isViewPluginPack(pack));
-  return [...nonViewPacks, ...buildBuiltinViewPacks()];
+  return packs;
+}
+
+function viewPluginDefinitionsForKind(
+  packs: MarketplacePluginPack[],
+  kind: string,
+): ViewPluginDefinition<string>[] {
+  const byId = new Map<string, ViewPluginDefinition<string>>();
+  for (const pack of packs) {
+    if (pack.kind !== kind) {
+      continue;
+    }
+    const id = viewPluginIdFromPack(pack);
+    byId.set(id, {
+      id,
+      name: pack.name,
+      description: pack.description,
+      capability: pack.capabilities[0] ?? pluginKindLabel(pack),
+      tokens: pack.tokens,
+    });
+  }
+  return [...byId.values()];
+}
+
+const appUiTokenCssVars: Record<string, string> = {
+  colorBg: "--color-bg",
+  colorBgAccent: "--color-bg-accent",
+  colorPanel: "--color-panel",
+  colorPanelStrong: "--color-panel-strong",
+  colorPanelSoft: "--color-panel-soft",
+  colorPanelMuted: "--color-panel-muted",
+  colorText: "--color-text",
+  colorHeading: "--color-heading",
+  colorMuted: "--color-muted",
+  colorFaint: "--color-faint",
+  colorBorder: "--color-border",
+  colorBorderStrong: "--color-border-strong",
+  colorBrand: "--color-brand",
+  colorBrandContrast: "--color-brand-contrast",
+  colorAction: "--color-action",
+  colorActionHover: "--color-action-hover",
+  colorActionContrast: "--color-action-contrast",
+  colorSuccess: "--color-success",
+  colorWarning: "--color-warning",
+  colorDanger: "--color-danger",
+  colorDangerBg: "--color-danger-bg",
+  colorDangerBorder: "--color-danger-border",
+  colorSelectedRing: "--color-selected-ring",
+  colorFill: "--color-fill",
+  colorLine: "--color-line",
+  colorLineSoft: "--color-line-soft",
+  shadowPanel: "--shadow-panel",
+  shadowSoft: "--shadow-soft",
+};
+
+function cssVariablesFromAppUiTokens(tokens?: Record<string, string> | null): CSSProperties {
+  if (!tokens) {
+    return {};
+  }
+  const style: Record<string, string> = {};
+  for (const [token, cssVariable] of Object.entries(appUiTokenCssVars)) {
+    const value = tokens[token];
+    if (typeof value === "string" && value.trim()) {
+      style[cssVariable] = value;
+    }
+  }
+  return style as CSSProperties;
 }
 
 function pluginName<T extends string>(
@@ -5225,6 +5334,27 @@ function readInitialInstalledViewPlugins(): string[] {
   }
 }
 
+function readInitialInstalledViewPluginVersions(): Record<string, string> {
+  const stored = localStorage.getItem(installedViewPluginVersionsStorageKey);
+  if (!stored) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[0] === "string" && typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
 function readInitialSourceListViewBySource(): Record<string, string> {
   const stored = localStorage.getItem(sourceListViewBySourceStorageKey);
   if (!stored) {
@@ -5266,8 +5396,8 @@ function readInitialAppUiThemeByMode(): AppUiThemeByMode {
     const parsed = JSON.parse(stored) as Record<string, unknown>;
     for (const mode of ["light", "dark"] as const) {
       const value = parsed?.[mode];
-      if (typeof value === "string" && appUiPlugins.some((plugin) => plugin.id === value)) {
-        result[mode] = value as AppUiPluginId;
+      if (typeof value === "string") {
+        result[mode] = value;
       }
     }
   } catch {
@@ -5330,6 +5460,28 @@ function persistNullablePlugin(storageKey: string, pluginId: string | null): voi
     return;
   }
   localStorage.removeItem(storageKey);
+}
+
+function comparePluginVersions(nextVersion: string, currentVersion: string): number {
+  const nextParts = versionParts(nextVersion);
+  const currentParts = versionParts(currentVersion);
+  const length = Math.max(nextParts.length, currentParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const next = nextParts[index] ?? 0;
+    const current = currentParts[index] ?? 0;
+    if (next !== current) {
+      return next > current ? 1 : -1;
+    }
+  }
+  return nextVersion.localeCompare(currentVersion);
+}
+
+function versionParts(version: string): number[] {
+  return version
+    .replace(/^[vV]/, "")
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
 }
 
 function clamp(value: number, min: number, max: number): number {

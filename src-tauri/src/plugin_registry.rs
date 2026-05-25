@@ -195,6 +195,7 @@ async fn fetch_remote_plugin_pack_from_base(
             authors: manifest.authors,
             parameters: None,
             auth: None,
+            tokens: Some(pack.tokens),
         });
     }
 
@@ -220,6 +221,7 @@ async fn fetch_remote_plugin_pack_from_base(
         authors: manifest.authors,
         parameters: pack.parameters,
         auth: pack.auth,
+        tokens: None,
     })
 }
 
@@ -247,6 +249,7 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack, Stri
             authors: Vec::new(),
             parameters: pack.parameters,
             auth: pack.auth,
+            tokens: None,
         });
     }
 
@@ -287,6 +290,7 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack, Stri
         authors: manifest.authors,
         parameters: pack.parameters,
         auth: pack.auth,
+        tokens: None,
     })
 }
 
@@ -550,6 +554,7 @@ fn rule_pack(
         authors: Vec::new(),
         parameters: None,
         auth: None,
+        tokens: None,
     }
 }
 
@@ -771,6 +776,7 @@ mod tests {
             slot: "app-ui".to_string(),
             description: None,
             capabilities: vec!["app.theme".to_string()],
+            tokens: std::collections::HashMap::new(),
         };
 
         assert!(validate_manifest(&entry, &manifest).is_ok());

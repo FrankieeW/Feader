@@ -1,5 +1,7 @@
 //! Shared data shapes exposed through Tauri commands.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Canonical source kinds persisted in the database.
@@ -374,6 +376,8 @@ pub struct XPathRulePack {
     pub parameters: Option<PluginParameters>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<PluginAuth>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<HashMap<String, String>>,
 }
 
 /// A plugin pack as shown in the marketplace, including local install state.
@@ -383,6 +387,8 @@ pub struct MarketplacePluginPack {
     #[serde(flatten)]
     pub pack: XPathRulePack,
     pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_market_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -588,6 +594,8 @@ pub struct RemoteViewPlugin {
     pub description: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub tokens: HashMap<String, String>,
 }
 
 /// One page-family rule contributed by a static XPath plugin pack.

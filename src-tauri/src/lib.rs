@@ -22,8 +22,8 @@ use models::{
     RssHubInstance, RssHubInstanceCheck, RssHubSettings, RssHubSourceConfig, Source,
     SourceRefreshResult, UpdateRssHubSourceInstanceRequest, UpdateSourceTitleRequest,
     UpdateXPathSourceRequest, VerifyWalletLoginRequest, WalletLoginChallenge, WalletSession,
-    XPathPreview, XPathRulePack, XPathSelectors, XPathSourceSuggestion, SOURCE_KIND_JSON_API,
-    SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
+    XPathPreview, XPathRulePack, XPathSelectors, XPathSourceSuggestion, PLUGIN_KIND_APP_UI_THEME,
+    SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
 };
 use siwe::{eip55, generate_nonce, Message, VerificationOpts};
 use std::sync::Arc;
@@ -187,7 +187,7 @@ async fn load_registry_packs(
     force_refresh: bool,
 ) -> Result<Vec<MarketplacePluginPack>, String> {
     let markets = load_plugin_markets(database)?;
-    let installed_ids = installed_plugin_ids(database)?;
+    let installed_versions = installed_plugin_versions(database)?;
     let mut all_packs = Vec::new();
     let mut seen_sources = std::collections::HashSet::new();
     let mut remote_ids = std::collections::HashSet::new();
@@ -214,6 +214,7 @@ async fn load_registry_packs(
                 database
                     .get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)?
                     .and_then(|cached| serde_json::from_str::<XPathRulePack>(&cached).ok())
+                    .filter(|pack| cached_plugin_pack_is_usable(pack))
             };
 
             let pack = match pack_json {
@@ -236,7 +237,8 @@ async fn load_registry_packs(
                 }
             };
             all_packs.push(MarketplacePluginPack {
-                installed: installed_ids.contains(&pack.id),
+                installed: installed_versions.contains_key(&pack.id),
+                installed_version: installed_versions.get(&pack.id).cloned(),
                 source_market_id: Some(market.id.clone()),
                 source_market_name: Some(market.name.clone()),
                 source_market_repository: Some(market.repository.clone()),
@@ -249,6 +251,7 @@ async fn load_registry_packs(
         if !remote_ids.contains(&pack.id) {
             all_packs.push(MarketplacePluginPack {
                 installed: true,
+                installed_version: Some(pack.version.clone()),
                 source_market_id: None,
                 source_market_name: None,
                 source_market_repository: None,
@@ -307,13 +310,17 @@ fn market_plugin_cache_key(market_id: &str, entry: &models::RegistryPluginEntry)
     )
 }
 
-fn installed_plugin_ids(
+fn cached_plugin_pack_is_usable(pack: &XPathRulePack) -> bool {
+    pack.kind != PLUGIN_KIND_APP_UI_THEME || pack.tokens.is_some()
+}
+
+fn installed_plugin_versions(
     database: &AppDatabase,
-) -> Result<std::collections::HashSet<String>, String> {
+) -> Result<std::collections::HashMap<String, String>, String> {
     Ok(database
         .list_installed_plugin_packs()?
         .into_iter()
-        .map(|pack| pack.id)
+        .map(|pack| (pack.id, pack.version))
         .collect())
 }
 
@@ -375,7 +382,9 @@ async fn install_plugin_from_market(
         .ok_or_else(|| "Plugin not found in market".to_string())?;
     let cache_key = market_plugin_cache_key(&market.id, &entry);
     let pack = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
-        Some(cached) => serde_json::from_str::<XPathRulePack>(&cached).ok(),
+        Some(cached) => serde_json::from_str::<XPathRulePack>(&cached)
+            .ok()
+            .filter(|pack| cached_plugin_pack_is_usable(pack)),
         None => None,
     };
     let pack = match pack {
