@@ -339,6 +339,12 @@ type RuntimeSourcePlugin = {
     routeTemplate: string;
     requiredCredentials?: string[];
   }[];
+  settingsCard?: {
+    id: string;
+    title: string;
+    renderer: string;
+    placement?: string | null;
+  } | null;
   settingsPage?: PluginSettingsPage | null;
 };
 
@@ -2681,7 +2687,10 @@ function App() {
   const installedRuntimePlugins = useMemo(
     () =>
       xpathRulePacks.filter(
-        (pack) => isRuntimeSourcePluginPack(pack) && pack.installed && pack.runtime?.settingsPage,
+        (pack) =>
+          isRuntimeSourcePluginPack(pack) &&
+          pack.installed &&
+          (pack.runtime?.settingsCard || pack.runtime?.settingsPage),
       ),
     [xpathRulePacks],
   );
@@ -4395,6 +4404,7 @@ function RuntimePluginSettingsCard({
   selected: boolean;
 }) {
   const page = plugin.runtime?.settingsPage;
+  const card = plugin.runtime?.settingsCard;
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [secretValues, setSecretValues] = useState<Record<string, string>>({});
   const [credential, setCredential] = useState<PluginCredential | null>(null);
@@ -4421,7 +4431,7 @@ function RuntimePluginSettingsCard({
     };
   }, [plugin.id]);
 
-  if (!page) return null;
+  if (!page && !card) return null;
 
   const resolvedValues = applyPluginSettingDefaults(page, values);
 
@@ -4474,10 +4484,26 @@ function RuntimePluginSettingsCard({
   }
 
   return (
-    <article className={`settings-card runtime-plugin-settings ${selected ? "selected" : ""}`}>
+    <article
+      className={`settings-card runtime-plugin-settings runtime-plugin-${card?.renderer ?? "generic"} ${
+        selected ? "selected" : ""
+      }`}
+    >
       <div className="panel-heading">
-        <span>{page.title}</span>
-        <span>{plugin.runtime?.runtime.engine ?? "Runtime"}</span>
+        <span>{card?.title ?? page?.title ?? plugin.name}</span>
+        <span>{plugin.runtime?.runtime.package ?? plugin.runtime?.runtime.engine ?? "Runtime"}</span>
+      </div>
+      <div className="runtime-card-hero">
+        <div>
+          <strong>{plugin.name}</strong>
+          <span>
+            {plugin.runtime?.runtime.engine}
+            {plugin.runtime?.runtime.version ? ` · ${plugin.runtime.runtime.version}` : ""}
+          </span>
+        </div>
+        <span className={`runtime-state ${Boolean(resolvedValues.enabled) ? "on" : "off"}`}>
+          {Boolean(resolvedValues.enabled) ? "Enabled" : "Disabled"}
+        </span>
       </div>
       <div className="runtime-permission-strip" aria-label={`${plugin.name} permissions`}>
         {plugin.permissions?.ui?.map((permission) => (
@@ -4493,7 +4519,17 @@ function RuntimePluginSettingsCard({
           <span key={`runtime-${permission}`}>Runtime: {permission}</span>
         ))}
       </div>
-      {page.sections.map((section) => (
+      {plugin.runtime?.routeTemplates?.length ? (
+        <div className="runtime-route-list">
+          {plugin.runtime.routeTemplates.map((route) => (
+            <div key={route.id}>
+              <span>{route.label}</span>
+              <code>{route.routeTemplate}</code>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {page?.sections.map((section) => (
         <section className="plugin-settings-section" key={section.id}>
           <div className="panel-subheading">
             <span>{section.title}</span>

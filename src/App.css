@@ -751,6 +751,63 @@ select:disabled {
   font-size: 11px;
 }
 
+.runtime-card-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--color-panel-soft);
+}
+
+.runtime-card-hero div {
+  display: grid;
+  gap: 3px;
+}
+
+.runtime-card-hero span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.runtime-state {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.runtime-state.on {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+}
+
+.runtime-state.off {
+  color: var(--color-muted);
+  background: var(--color-panel-strong);
+}
+
+.runtime-route-list {
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-route-list div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.runtime-route-list code {
+  color: var(--color-muted);
+  white-space: normal;
+  word-break: break-word;
+}
+
 .rsshub-instance-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

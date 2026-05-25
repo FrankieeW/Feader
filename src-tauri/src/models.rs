@@ -622,6 +622,8 @@ pub struct RuntimeSourcePlugin {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub route_templates: Vec<RuntimeRouteTemplate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_card: Option<PluginSettingsCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_page: Option<PluginSettingsPage>,
 }
 
@@ -647,6 +649,17 @@ pub struct RuntimeRouteTemplate {
     pub route_template: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_credentials: Vec<String>,
+}
+
+/// A host-rendered, plugin-declared card inserted into Settings.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettingsCard {
+    pub id: String,
+    pub title: String,
+    pub renderer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
 }
 
 /// Host-rendered settings page declared by an advanced plugin.
