@@ -76,6 +76,7 @@ type EntryLayout = "list" | "card";
 type ReaderTypography = "system" | "serif" | "large";
 type ReaderView = "none" | "preview" | "immersive";
 type AppUiPluginId = "editorial" | "terminal" | "calm" | "cyberpunk";
+type AppUiThemeByMode = { light: AppUiPluginId | null; dark: AppUiPluginId | null };
 type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
 type DetailViewPluginId = "magazine" | "focus" | "research" | "cinema";
 type PaneKey = "sidebar" | "timeline";
@@ -444,9 +445,10 @@ const xpathPresets: Record<string, XPathSelectors> = {
 
 const themeStorageKey = "feader.theme";
 const entryLayoutStorageKey = "feader.entryLayout";
-const appUiPluginStorageKey = "feader.plugin.appUi";
-const sourceListPluginStorageKey = "feader.plugin.sourceList";
+const appUiThemeByModeStorageKey = "feader.theme.appUiByMode";
 const detailViewPluginStorageKey = "feader.plugin.detailView";
+const installedViewPluginsStorageKey = "feader.plugin.installedViews";
+const sourceListViewBySourceStorageKey = "feader.sourceListView.bySource";
 const paneStorageKey = "feader.paneWidths";
 const readerTypographyStorageKey = "feader.readerTypography";
 const feedGroupStorageKey = "feader.feedGroups";
@@ -1424,14 +1426,17 @@ function App() {
   const [showSourceComposer, setShowSourceComposer] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readInitialThemeMode());
   const [entryLayout, setEntryLayout] = useState<EntryLayout>(() => readInitialEntryLayout());
-  const [appUiPlugin, setAppUiPlugin] = useState<AppUiPluginId | null>(() =>
-    readInitialPluginId(appUiPluginStorageKey, appUiPlugins),
-  );
-  const [sourceListPlugin, setSourceListPlugin] = useState<SourceListPluginId | null>(() =>
-    readInitialPluginId(sourceListPluginStorageKey, sourceListPlugins),
+  const [appUiThemeByMode, setAppUiThemeByMode] = useState<AppUiThemeByMode>(() =>
+    readInitialAppUiThemeByMode(),
   );
   const [detailViewPlugin, setDetailViewPlugin] = useState<DetailViewPluginId | null>(() =>
     readInitialPluginId(detailViewPluginStorageKey, detailViewPlugins),
+  );
+  const [installedViewPlugins, setInstalledViewPlugins] = useState<string[]>(() =>
+    readInitialInstalledViewPlugins(),
+  );
+  const [sourceListViewBySource, setSourceListViewBySource] = useState<Record<string, string>>(() =>
+    readInitialSourceListViewBySource(),
   );
   const [readerTypography, setReaderTypography] = useState<ReaderTypography>(() =>
     readInitialReaderTypography(),
@@ -1459,6 +1464,7 @@ function App() {
   const [pluginInstallUrl, setPluginInstallUrl] = useState("");
   const [pluginTemplateStatus, setPluginTemplateStatus] = useState<string | null>(null);
   const [hubSearchQuery, setHubSearchQuery] = useState("");
+  const [hubGroup, setHubGroup] = useState<"all" | "sources" | "appearance">("all");
   const [hubCategory, setHubCategory] = useState("all");
   const [showPluginDialog, setShowPluginDialog] = useState<XPathRulePack | null>(null);
   const [dialogUrl, setDialogUrl] = useState("");
@@ -1534,7 +1540,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    applyThemeMode(themeMode);
+    const applyAppearance = () => {
+      applyThemeMode(themeMode);
+      applyAppUiPlugin(appUiThemeByMode[resolveThemeMode(themeMode)]);
+    };
+    applyAppearance();
     localStorage.setItem(themeStorageKey, themeMode);
 
     if (themeMode !== "system") {
@@ -1542,27 +1552,39 @@ function App() {
     }
 
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = () => applyThemeMode("system");
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, [themeMode]);
+    media.addEventListener("change", applyAppearance);
+    return () => media.removeEventListener("change", applyAppearance);
+  }, [themeMode, appUiThemeByMode]);
 
   useEffect(() => {
     localStorage.setItem(entryLayoutStorageKey, entryLayout);
   }, [entryLayout]);
 
   useEffect(() => {
-    persistNullablePlugin(appUiPluginStorageKey, appUiPlugin);
-    applyAppUiPlugin(appUiPlugin);
-  }, [appUiPlugin]);
-
-  useEffect(() => {
-    persistNullablePlugin(sourceListPluginStorageKey, sourceListPlugin);
-  }, [sourceListPlugin]);
+    localStorage.setItem(appUiThemeByModeStorageKey, JSON.stringify(appUiThemeByMode));
+  }, [appUiThemeByMode]);
 
   useEffect(() => {
     persistNullablePlugin(detailViewPluginStorageKey, detailViewPlugin);
   }, [detailViewPlugin]);
+
+  useEffect(() => {
+    localStorage.setItem(installedViewPluginsStorageKey, JSON.stringify(installedViewPlugins));
+    setAppUiThemeByMode((current) => {
+      const next: AppUiThemeByMode = {
+        light: current.light && !installedViewPlugins.includes(current.light) ? null : current.light,
+        dark: current.dark && !installedViewPlugins.includes(current.dark) ? null : current.dark,
+      };
+      return next.light === current.light && next.dark === current.dark ? current : next;
+    });
+    setDetailViewPlugin((current) =>
+      current && !installedViewPlugins.includes(current) ? null : current,
+    );
+  }, [installedViewPlugins]);
+
+  useEffect(() => {
+    localStorage.setItem(sourceListViewBySourceStorageKey, JSON.stringify(sourceListViewBySource));
+  }, [sourceListViewBySource]);
 
   useEffect(() => {
     localStorage.setItem(readerTypographyStorageKey, readerTypography);
@@ -1588,35 +1610,50 @@ function App() {
 
   const sourceGroups = useMemo(() => groupSourcesByCategory(sources), [sources]);
 
-  const hubCategories = useMemo(() => {
-    const cats = new Set<string>();
+  const hubGroups = useMemo(() => {
+    let hasSources = false;
+    let hasAppearance = false;
     for (const pack of xpathRulePacks) {
-      const viewCategory = viewPluginCategory(pack);
-      if (viewCategory) {
-        cats.add(viewCategory);
-        continue;
-      }
-      for (const c of pack.candidates) {
-        if (c.pageType.includes("forum")) cats.add("Forum");
-        else if (c.pageType.includes("video")) cats.add("Video");
-        else if (c.pageType.includes("article")) cats.add("Article");
-        else cats.add("Other");
-      }
+      if (isViewPluginPack(pack)) hasAppearance = true;
+      else hasSources = true;
     }
-    return ["all", ...cats];
+    const groups: { id: "all" | "sources" | "appearance"; label: string }[] = [
+      { id: "all", label: "All" },
+    ];
+    if (hasSources) groups.push({ id: "sources", label: "Sources" });
+    if (hasAppearance) groups.push({ id: "appearance", label: "Appearance" });
+    return groups;
   }, [xpathRulePacks]);
+
+  const hubSubCategories = useMemo(() => {
+    const present = new Set<string>();
+    if (hubGroup === "sources") {
+      for (const pack of xpathRulePacks) {
+        if (isViewPluginPack(pack)) continue;
+        for (const family of sourcePackFamilies(pack)) present.add(family);
+      }
+      return sourceFamilyOrder.filter((family) => present.has(family));
+    }
+    if (hubGroup === "appearance") {
+      for (const pack of xpathRulePacks) {
+        const slot = viewPluginCategory(pack);
+        if (slot) present.add(slot);
+      }
+      return viewSlotOrder.filter((slot) => present.has(slot));
+    }
+    return [];
+  }, [xpathRulePacks, hubGroup]);
 
   const filteredPacks = useMemo(() => {
     const query = hubSearchQuery.trim().toLowerCase();
     return xpathRulePacks.filter((pack) => {
+      const isView = isViewPluginPack(pack);
+      if (hubGroup === "sources" && isView) return false;
+      if (hubGroup === "appearance" && !isView) return false;
       if (hubCategory !== "all") {
-        const viewCategory = viewPluginCategory(pack);
-        const matchesCat = viewCategory
-          ? viewCategory === hubCategory
-          : pack.candidates.some((c) => {
-              const pt = c.pageType.toLowerCase();
-              return pt.includes(hubCategory.toLowerCase());
-            });
+        const matchesCat = isView
+          ? viewPluginCategory(pack) === hubCategory
+          : sourcePackFamilies(pack).has(hubCategory);
         if (!matchesCat) return false;
       }
       if (!query) return true;
@@ -1627,7 +1664,7 @@ function App() {
         pack.capabilities.some((cap) => cap.toLowerCase().includes(query))
       );
     });
-  }, [xpathRulePacks, hubSearchQuery, hubCategory]);
+  }, [xpathRulePacks, hubSearchQuery, hubGroup, hubCategory]);
 
   const officialPacks = useMemo(
     () => filteredPacks.filter((p) => p.trust === "bundled-official" || p.trust === "official"),
@@ -1694,11 +1731,13 @@ function App() {
       const packs = await invoke<MarketplacePluginPack[]>("fetch_registry_packs", {
         forceRefresh,
       });
-      setXPathRulePacks(packs);
+      setXPathRulePacks(withBuiltinViewPacks(packs));
       setHubRegistryStatus(forceRefresh ? "Remote registry refreshed." : "Remote registry loaded.");
     } catch (error) {
       const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
-      setXPathRulePacks(packs.map((pack) => ({ ...pack, installed: true, sourceMarketId: null })));
+      setXPathRulePacks(
+        withBuiltinViewPacks(packs.map((pack) => ({ ...pack, installed: true, sourceMarketId: null }))),
+      );
       setHubRegistryStatus(`Remote registry unavailable. Showing bundled packs. ${String(error)}`);
     }
   }
@@ -1827,7 +1866,7 @@ function App() {
 
   async function handleInstallPlugin(pack: MarketplacePluginPack): Promise<void> {
     if (isViewPluginPack(pack)) {
-      handleEnableViewPlugin(pack);
+      handleInstallViewPlugin(pack);
       return;
     }
     if (!pack.sourceMarketId) {
@@ -1845,7 +1884,7 @@ function App() {
 
   async function handleUninstallPlugin(pack: MarketplacePluginPack): Promise<void> {
     if (isViewPluginPack(pack)) {
-      handleDisableViewPlugin(pack);
+      handleUninstallViewPlugin(pack);
       return;
     }
     await runTask("Uninstalling plugin", async () => {
@@ -1855,50 +1894,27 @@ function App() {
     });
   }
 
-  function handleEnableViewPlugin(pack: MarketplacePluginPack): void {
-    if (pack.kind === "app-ui-theme") {
-      setAppUiPlugin(appUiPluginFromPack(pack));
-      setStatus(`Enabled view plugin: ${pack.name}`);
-      return;
-    }
-    if (pack.kind === "source-list-view") {
-      setSourceListPlugin(sourceListPluginFromPack(pack));
-      setStatus(`Enabled view plugin: ${pack.name}`);
-      return;
-    }
-    if (pack.kind === "detail-view") {
-      setDetailViewPlugin(detailViewPluginFromPack(pack));
-      setStatus(`Enabled view plugin: ${pack.name}`);
-    }
+  function handleInstallViewPlugin(pack: MarketplacePluginPack): void {
+    const pluginId = viewPluginIdFromPack(pack);
+    setInstalledViewPlugins((current) =>
+      current.includes(pluginId) ? current : [...current, pluginId],
+    );
+    setStatus(`Installed view plugin: ${pack.name}`);
   }
 
-  function handleDisableViewPlugin(pack: MarketplacePluginPack): void {
-    if (pack.kind === "app-ui-theme") {
-      setAppUiPlugin(null);
-    } else if (pack.kind === "source-list-view") {
-      setSourceListPlugin(null);
-    } else if (pack.kind === "detail-view") {
-      setDetailViewPlugin(null);
-    }
-    setStatus(`Disabled view plugin: ${pack.name}`);
+  function handleUninstallViewPlugin(pack: MarketplacePluginPack): void {
+    const pluginId = viewPluginIdFromPack(pack);
+    setInstalledViewPlugins((current) => current.filter((id) => id !== pluginId));
+    setStatus(`Uninstalled view plugin: ${pack.name}`);
   }
 
-  function isViewPluginEnabled(pack: MarketplacePluginPack): boolean {
-    if (pack.kind === "app-ui-theme") {
-      return appUiPlugin === appUiPluginFromPack(pack);
-    }
-    if (pack.kind === "source-list-view") {
-      return sourceListPlugin === sourceListPluginFromPack(pack);
-    }
-    if (pack.kind === "detail-view") {
-      return detailViewPlugin === detailViewPluginFromPack(pack);
-    }
-    return false;
+  function isViewPluginInstalled(pack: MarketplacePluginPack): boolean {
+    return installedViewPlugins.includes(viewPluginIdFromPack(pack));
   }
 
   function pluginActionLabel(pack: MarketplacePluginPack): string {
     if (isViewPluginPack(pack)) {
-      return isViewPluginEnabled(pack) ? "Disable" : "Enable";
+      return isViewPluginInstalled(pack) ? "Uninstall" : "Install";
     }
     return pack.installed ? "Add Source" : "Install";
   }
@@ -2384,14 +2400,14 @@ function App() {
   function handleResetWorkspaceLayout(): void {
     setPaneWidths(defaultPaneWidths);
     setEntryLayout("list");
-    setAppUiPlugin(null);
-    setSourceListPlugin(null);
+    setAppUiThemeByMode({ light: null, dark: null });
     setDetailViewPlugin(null);
+    setSourceListViewBySource({});
     localStorage.removeItem(paneStorageKey);
     localStorage.removeItem(entryLayoutStorageKey);
-    localStorage.removeItem(appUiPluginStorageKey);
-    localStorage.removeItem(sourceListPluginStorageKey);
+    localStorage.removeItem(appUiThemeByModeStorageKey);
     localStorage.removeItem(detailViewPluginStorageKey);
+    localStorage.removeItem(sourceListViewBySourceStorageKey);
   }
 
   async function handleToggleAutoRefresh(enabled: boolean): Promise<void> {
@@ -2476,13 +2492,30 @@ function App() {
     "--sidebar-width": `${paneWidths.sidebar}px`,
     "--timeline-width": `${paneWidths.timeline}px`,
   } as CSSProperties;
-  const effectiveSourceListView = sourceListPlugin ?? entryLayout;
-  const activePluginCount = [appUiPlugin, sourceListPlugin, detailViewPlugin].filter(Boolean).length;
+  const currentSourceKey = String(selectedSourceId ?? "all");
+  const storedListView = sourceListViewBySource[currentSourceKey] ?? entryLayout;
+  const effectiveListView =
+    isSourceListPluginId(storedListView) && !installedViewPlugins.includes(storedListView)
+      ? "list"
+      : storedListView;
+  const installedSourceListPlugins = useMemo(
+    () => sourceListPlugins.filter((plugin) => installedViewPlugins.includes(plugin.id)),
+    [installedViewPlugins],
+  );
+  const resolvedAppUiTheme = appUiThemeByMode[resolveThemeMode(themeMode)];
+
+  function handleSelectListView(choice: string): void {
+    setSourceListViewBySource((current) => ({ ...current, [currentSourceKey]: choice }));
+  }
+
+  function handleAssignTheme(mode: "light" | "dark", pluginId: AppUiPluginId | null): void {
+    setAppUiThemeByMode((current) => ({ ...current, [mode]: pluginId }));
+  }
 
   return (
     <main
       className="app-shell"
-      data-app-ui-plugin={appUiPlugin ?? "native"}
+      data-app-ui-plugin={resolvedAppUiTheme ?? "native"}
       data-view={activeView}
       style={shellStyle}
     >
@@ -2707,11 +2740,18 @@ function App() {
               </button>
             ))}
           </div>
-          <EntryLayoutControl layout={entryLayout} onChange={setEntryLayout} />
+          <SourceListViewControl
+            activeChoice={effectiveListView}
+            installedPlugins={installedSourceListPlugins}
+            onChange={handleSelectListView}
+          />
           <div className="status-line">{status}</div>
         </div>
 
-        <div className={`story-list ${entryLayout}`} data-source-list-plugin={effectiveSourceListView}>
+        <div
+          className={`story-list ${effectiveListView === "card" ? "card" : "list"}`}
+          data-source-list-plugin={effectiveListView}
+        >
           {articles.length === 0 ? (
             <section className="empty-state">
               <h2>No articles</h2>
@@ -2733,7 +2773,7 @@ function App() {
                 role="button"
                 tabIndex={0}
               >
-                {entryLayout === "card" || sourceListPlugin === "image-board" ? (
+                {effectiveListView === "card" || effectiveListView === "image-board" ? (
                   <div
                     className="story-thumb"
                     style={
@@ -2741,7 +2781,7 @@ function App() {
                     }
                   />
                 ) : null}
-                {sourceListPlugin === "social-stream" ? (
+                {effectiveListView === "social-stream" ? (
                   <span className="story-avatar" aria-hidden="true">
                     {article.sourceTitle.charAt(0).toUpperCase()}
                   </span>
@@ -3009,17 +3049,39 @@ function App() {
             />
           </div>
 
-          <nav className="hub-categories" aria-label="Plugin categories">
-            {hubCategories.map((cat) => (
+          <nav className="hub-categories" aria-label="Plugin type">
+            {hubGroups.map((group) => (
               <button
-                className={`hub-category-chip ${hubCategory === cat ? "active" : ""}`}
-                key={cat}
-                onClick={() => setHubCategory(cat)}
+                className={`hub-category-chip ${hubGroup === group.id ? "active" : ""}`}
+                key={group.id}
+                onClick={() => {
+                  setHubGroup(group.id);
+                  setHubCategory("all");
+                }}
               >
-                {cat === "all" ? "All" : cat}
+                {group.label}
               </button>
             ))}
           </nav>
+          {hubSubCategories.length > 0 && (
+            <nav className="hub-subcategories" aria-label="Plugin subcategory">
+              <button
+                className={`hub-category-chip ${hubCategory === "all" ? "active" : ""}`}
+                onClick={() => setHubCategory("all")}
+              >
+                All
+              </button>
+              {hubSubCategories.map((sub) => (
+                <button
+                  className={`hub-category-chip ${hubCategory === sub ? "active" : ""}`}
+                  key={sub}
+                  onClick={() => setHubCategory(sub)}
+                >
+                  {sub}
+                </button>
+              ))}
+            </nav>
+          )}
 
           <div className="hub-stats" aria-label="Plugin statistics">
             <span>{xpathRulePacks.length} plugins available</span>
@@ -3041,7 +3103,7 @@ function App() {
               <h2 className="hub-section-title">Featured</h2>
               <div className="hub-featured-grid">
                 {officialPacks.slice(0, 3).map((pack) => (
-                  <article className="hub-card hub-card-featured" key={pack.id}>
+                  <article className="hub-card hub-card-featured" key={marketplacePackKey(pack)}>
                     <HubCardIcon className="hub-card-icon" pack={pack} />
                     <div className="hub-card-body">
                       <div className="hub-card-header">
@@ -3067,9 +3129,9 @@ function App() {
                         className="hub-add-btn primary-action"
                         onClick={() =>
                           isViewPluginPack(pack)
-                            ? isViewPluginEnabled(pack)
-                              ? handleDisableViewPlugin(pack)
-                              : handleEnableViewPlugin(pack)
+                            ? isViewPluginInstalled(pack)
+                              ? handleUninstallViewPlugin(pack)
+                              : handleInstallViewPlugin(pack)
                             : pack.installed
                               ? openPluginDialog(pack)
                               : void handleInstallPlugin(pack)
@@ -3086,7 +3148,13 @@ function App() {
 
           <section className="hub-section" aria-label="All plugins">
             <h2 className="hub-section-title">
-              {hubCategory === "all" ? "All Plugins" : hubCategory}
+              {hubCategory !== "all"
+                ? hubCategory
+                : hubGroup === "sources"
+                  ? "Source Plugins"
+                  : hubGroup === "appearance"
+                    ? "Appearance Plugins"
+                    : "All Plugins"}
             </h2>
             {filteredPacks.length === 0 ? (
               <section className="empty-state">
@@ -3100,7 +3168,7 @@ function App() {
             ) : (
               <div className="hub-grid">
                 {filteredPacks.map((pack) => (
-                  <article className="hub-card" key={pack.id}>
+                  <article className="hub-card" key={marketplacePackKey(pack)}>
                     <HubCardIcon className="hub-card-icon hub-card-icon-sm" pack={pack} />
                     <div className="hub-card-body">
                       <div className="hub-card-header">
@@ -3126,9 +3194,9 @@ function App() {
                         className="hub-add-btn"
                         onClick={() =>
                           isViewPluginPack(pack)
-                            ? isViewPluginEnabled(pack)
-                              ? handleDisableViewPlugin(pack)
-                              : handleEnableViewPlugin(pack)
+                            ? isViewPluginInstalled(pack)
+                              ? handleUninstallViewPlugin(pack)
+                              : handleInstallViewPlugin(pack)
                             : pack.installed
                               ? openPluginDialog(pack)
                               : void handleInstallPlugin(pack)
@@ -3532,13 +3600,11 @@ function App() {
             </article>
 
             <PluginSwitchboard
-              activeCount={activePluginCount}
-              appUiPlugin={appUiPlugin}
+              appUiThemeByMode={appUiThemeByMode}
               detailViewPlugin={detailViewPlugin}
-              onAppUiPluginChange={setAppUiPlugin}
-              onDetailViewPluginChange={setDetailViewPlugin}
-              onSourceListPluginChange={setSourceListPlugin}
-              sourceListPlugin={sourceListPlugin}
+              installedViewPlugins={installedViewPlugins}
+              onActivateDetailView={setDetailViewPlugin}
+              onAssignTheme={handleAssignTheme}
             />
 
             <article className="settings-card">
@@ -4092,6 +4158,37 @@ function EntryLayoutControl({
   );
 }
 
+function SourceListViewControl({
+  activeChoice,
+  installedPlugins,
+  onChange,
+}: {
+  activeChoice: string;
+  installedPlugins: ViewPluginDefinition<SourceListPluginId>[];
+  onChange: (choice: string) => void;
+}) {
+  const options: { id: string; label: string }[] = [
+    { id: "list", label: "List" },
+    { id: "card", label: "Card" },
+    ...installedPlugins.map((plugin) => ({ id: plugin.id, label: plugin.name })),
+  ];
+  return (
+    <div className="entry-layout-control source-list-view-control" role="group" aria-label="Source list view">
+      {options.map((option) => (
+        <button
+          aria-pressed={activeChoice === option.id}
+          className={activeChoice === option.id ? "active" : ""}
+          key={option.id}
+          onClick={() => onChange(option.id)}
+          type="button"
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SourceDetailPanel({
   editXPathPreview,
   editXPathSelectors,
@@ -4610,83 +4707,100 @@ function ReaderTypographyControl({
 }
 
 function PluginSwitchboard({
-  activeCount,
-  appUiPlugin,
+  appUiThemeByMode,
   detailViewPlugin,
-  onAppUiPluginChange,
-  onDetailViewPluginChange,
-  onSourceListPluginChange,
-  sourceListPlugin,
+  installedViewPlugins,
+  onActivateDetailView,
+  onAssignTheme,
 }: {
-  activeCount: number;
-  appUiPlugin: AppUiPluginId | null;
+  appUiThemeByMode: AppUiThemeByMode;
   detailViewPlugin: DetailViewPluginId | null;
-  onAppUiPluginChange: (plugin: AppUiPluginId | null) => void;
-  onDetailViewPluginChange: (plugin: DetailViewPluginId | null) => void;
-  onSourceListPluginChange: (plugin: SourceListPluginId | null) => void;
-  sourceListPlugin: SourceListPluginId | null;
+  installedViewPlugins: string[];
+  onActivateDetailView: (plugin: DetailViewPluginId | null) => void;
+  onAssignTheme: (mode: "light" | "dark", pluginId: AppUiPluginId | null) => void;
 }) {
+  const installedAppUi = appUiPlugins.filter((plugin) => installedViewPlugins.includes(plugin.id));
+  const installedDetail = detailViewPlugins.filter((plugin) =>
+    installedViewPlugins.includes(plugin.id),
+  );
   return (
     <article className="settings-card plugin-switchboard">
       <div className="panel-heading">
         <span>View plugins</span>
-        <span>{activeCount} enabled</span>
+        <span>{installedViewPlugins.length} installed</span>
       </div>
       <p className="plugin-switchboard-copy">
-        Built-in plugin slots for the app shell, source list, and article detail view. Disable a slot
-        to return to Feader native rendering.
+        Install appearance plugins from the Plugin Hub, then assign a theme to Light and Dark and pick
+        an article detail view. Source list views are chosen per source in the reading queue.
       </p>
-      <PluginSlot
-        activePlugin={appUiPlugin}
-        label="App UI theme"
-        onChange={onAppUiPluginChange}
-        plugins={appUiPlugins}
+      <ActivationSlot
+        activeId={appUiThemeByMode.light}
+        baseLabel="Light"
+        baseHint="Built-in light appearance"
+        label="Light theme"
+        onChange={(id) => onAssignTheme("light", id)}
+        options={installedAppUi}
       />
-      <PluginSlot
-        activePlugin={sourceListPlugin}
-        label="Source list view"
-        onChange={onSourceListPluginChange}
-        plugins={sourceListPlugins}
+      <ActivationSlot
+        activeId={appUiThemeByMode.dark}
+        baseLabel="Dark"
+        baseHint="Built-in dark appearance"
+        label="Dark theme"
+        onChange={(id) => onAssignTheme("dark", id)}
+        options={installedAppUi}
       />
-      <PluginSlot
-        activePlugin={detailViewPlugin}
+      <ActivationSlot
+        activeId={detailViewPlugin}
+        baseLabel="Native"
+        baseHint="Feader native article detail"
         label="Detail content view"
-        onChange={onDetailViewPluginChange}
-        plugins={detailViewPlugins}
+        onChange={onActivateDetailView}
+        options={installedDetail}
       />
     </article>
   );
 }
 
-function PluginSlot<T extends string>({
-  activePlugin,
+function ActivationSlot<T extends string>({
+  activeId,
+  baseHint,
+  baseLabel,
   label,
   onChange,
-  plugins,
+  options,
 }: {
-  activePlugin: T | null;
+  activeId: T | null;
+  baseHint: string;
+  baseLabel: string;
   label: string;
-  onChange: (plugin: T | null) => void;
-  plugins: ViewPluginDefinition<T>[];
+  onChange: (pluginId: T | null) => void;
+  options: ViewPluginDefinition<T>[];
 }) {
   return (
     <section className="plugin-slot" aria-label={label}>
       <div className="plugin-slot-header">
         <div>
           <strong>{label}</strong>
-          <span>{activePlugin ? pluginName(activePlugin, plugins) : "Native Feader view"}</span>
+          <span>{activeId ? pluginName(activeId, options) : baseLabel}</span>
         </div>
-        <button disabled={!activePlugin} onClick={() => onChange(null)} type="button">
-          Disable
-        </button>
       </div>
       <div className="plugin-option-grid">
-        {plugins.map((plugin) => (
+        <button
+          aria-pressed={activeId === null}
+          className={`plugin-option ${activeId === null ? "active" : ""}`}
+          onClick={() => onChange(null)}
+          type="button"
+        >
+          <span>{baseLabel}</span>
+          <em>built-in</em>
+          <small>{baseHint}</small>
+        </button>
+        {options.map((plugin) => (
           <button
-            aria-pressed={activePlugin === plugin.id}
-            className={`plugin-option ${activePlugin === plugin.id ? "active" : ""}`}
+            aria-pressed={activeId === plugin.id}
+            className={`plugin-option ${activeId === plugin.id ? "active" : ""}`}
             key={plugin.id}
-            onClick={() => onChange(activePlugin === plugin.id ? null : plugin.id)}
+            onClick={() => onChange(activeId === plugin.id ? null : plugin.id)}
             type="button"
           >
             <span>{plugin.name}</span>
@@ -4925,6 +5039,21 @@ function isViewPluginPack(pack: { kind: string }): boolean {
   );
 }
 
+const sourceFamilyOrder = ["Forum", "Video", "Article", "Other"];
+const viewSlotOrder = ["App UI", "Source List", "Detail View"];
+
+function sourcePackFamilies(pack: { candidates: { pageType: string }[] }): Set<string> {
+  const families = new Set<string>();
+  for (const candidate of pack.candidates) {
+    const pageType = candidate.pageType.toLowerCase();
+    if (pageType.includes("forum")) families.add("Forum");
+    else if (pageType.includes("video")) families.add("Video");
+    else if (pageType.includes("article")) families.add("Article");
+    else families.add("Other");
+  }
+  return families;
+}
+
 function viewPluginCategory(pack: { kind: string }): string | null {
   if (pack.kind === "app-ui-theme") {
     return "App UI";
@@ -4950,6 +5079,10 @@ function pluginMetaLabel(pack: XPathRulePack): string {
     return pack.capabilities.join(", ");
   }
   return pack.candidates.map((candidate) => candidate.pageType).join(", ");
+}
+
+function marketplacePackKey(pack: MarketplacePluginPack): string {
+  return `${pack.sourceMarketId ?? "local"}:${pack.id}:${pack.version}`;
 }
 
 function pluginMarketLabel(pack: MarketplacePluginPack): string {
@@ -4986,6 +5119,65 @@ function detailViewPluginFromPack(pack: { id: string }): DetailViewPluginId {
   return "magazine";
 }
 
+function viewPluginIdFromPack(pack: { id: string; kind: string }): string {
+  if (pack.id.startsWith("view.")) {
+    return pack.id.slice("view.".length);
+  }
+  if (pack.kind === "app-ui-theme") {
+    return appUiPluginFromPack(pack);
+  }
+  if (pack.kind === "source-list-view") {
+    return sourceListPluginFromPack(pack);
+  }
+  return detailViewPluginFromPack(pack);
+}
+
+const officialViewPluginAuthors: PluginAuthor[] = [
+  {
+    name: "Frankie Wang",
+    evmAddress: "0x00000073a2c5581b9ea3d79261a567571Dd14E31",
+    avatarUrl: "https://github.com/FrankieeW.png",
+    website: "https://github.com/FrankieeW",
+    email: "git@frankie.wang",
+    githubId: "FrankieeW",
+  },
+];
+
+function buildBuiltinViewPack(
+  plugin: ViewPluginDefinition<string>,
+  kind: string,
+): MarketplacePluginPack {
+  return {
+    id: `view.${plugin.id}`,
+    name: plugin.name,
+    version: "1.0.0",
+    apiVersion: "feader-view-plugin/v1",
+    kind,
+    registry: "https://github.com/FrankieeW/FeaderHub",
+    trust: "official",
+    description: plugin.description,
+    logo: null,
+    capabilities: [plugin.capability],
+    candidates: [],
+    authors: officialViewPluginAuthors,
+    installed: true,
+    sourceMarketId: null,
+  };
+}
+
+function buildBuiltinViewPacks(): MarketplacePluginPack[] {
+  return [
+    ...appUiPlugins.map((plugin) => buildBuiltinViewPack(plugin, "app-ui-theme")),
+    ...sourceListPlugins.map((plugin) => buildBuiltinViewPack(plugin, "source-list-view")),
+    ...detailViewPlugins.map((plugin) => buildBuiltinViewPack(plugin, "detail-view")),
+  ];
+}
+
+function withBuiltinViewPacks(packs: MarketplacePluginPack[]): MarketplacePluginPack[] {
+  const nonViewPacks = packs.filter((pack) => !isViewPluginPack(pack));
+  return [...nonViewPacks, ...buildBuiltinViewPacks()];
+}
+
 function pluginName<T extends string>(
   pluginId: T,
   plugins: ViewPluginDefinition<T>[],
@@ -5018,6 +5210,70 @@ function readInitialPluginId<T extends string>(
     return stored as T;
   }
   return null;
+}
+
+function readInitialInstalledViewPlugins(): string[] {
+  const stored = localStorage.getItem(installedViewPluginsStorageKey);
+  if (!stored) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function readInitialSourceListViewBySource(): Record<string, string> {
+  const stored = localStorage.getItem(sourceListViewBySourceStorageKey);
+  if (!stored) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).filter(
+          ([, value]) => typeof value === "string",
+        ) as [string, string][],
+      );
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function isSourceListPluginId(value: string): value is SourceListPluginId {
+  return sourceListPlugins.some((plugin) => plugin.id === value);
+}
+
+function resolveThemeMode(mode: ThemeMode): "light" | "dark" {
+  if (mode === "system") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return mode;
+}
+
+function readInitialAppUiThemeByMode(): AppUiThemeByMode {
+  const result: AppUiThemeByMode = { light: null, dark: null };
+  const stored = localStorage.getItem(appUiThemeByModeStorageKey);
+  if (!stored) {
+    return result;
+  }
+  try {
+    const parsed = JSON.parse(stored) as Record<string, unknown>;
+    for (const mode of ["light", "dark"] as const) {
+      const value = parsed?.[mode];
+      if (typeof value === "string" && appUiPlugins.some((plugin) => plugin.id === value)) {
+        result[mode] = value as AppUiPluginId;
+      }
+    }
+  } catch {
+    return result;
+  }
+  return result;
 }
 
 function readInitialReaderTypography(): ReaderTypography {
