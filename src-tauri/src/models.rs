@@ -621,6 +621,8 @@ pub struct RuntimeSourcePlugin {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub route_templates: Vec<RuntimeRouteTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_page: Option<PluginSettingsPage>,
 }
 
 /// Runtime requirements for an advanced source plugin.
@@ -645,6 +647,61 @@ pub struct RuntimeRouteTemplate {
     pub route_template: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_credentials: Vec<String>,
+}
+
+/// Host-rendered settings page declared by an advanced plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettingsPage {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<PluginSettingsSection>,
+}
+
+/// Group of settings fields displayed together.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettingsSection {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<PluginSettingsField>,
+}
+
+/// One host-rendered plugin setting field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettingsField {
+    pub key: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<PluginParamOption>>,
+}
+
+/// Request body for saving namespaced plugin config.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPluginConfigRequest {
+    pub plugin_id: String,
+    pub values: serde_json::Value,
+}
+
+/// Request body for importing namespaced plugin config.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPluginConfigRequest {
+    pub plugin_id: String,
+    pub json: String,
 }
 
 /// Remote xpath-rule-pack payload.

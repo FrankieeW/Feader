@@ -709,6 +709,28 @@ select:disabled {
   overflow: auto;
 }
 
+.plugin-settings-section {
+  display: grid;
+  gap: 8px;
+}
+
+.panel-subheading {
+  display: grid;
+  gap: 3px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.panel-subheading > span {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.plugin-config-textarea {
+  width: 100%;
+  min-height: 92px;
+}
+
 .rsshub-instance-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

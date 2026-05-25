@@ -939,6 +939,7 @@ mod tests {
             },
             capabilities: vec!["runtime.localFeedGenerator".to_string()],
             route_templates: Vec::new(),
+            settings_page: None,
         };
 
         assert!(validate_manifest(&entry, &manifest).is_ok());

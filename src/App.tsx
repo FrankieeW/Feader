@@ -296,7 +296,29 @@ type XPathRulePack = {
 type PluginPermissions = {
   network?: string[];
   credentials?: string[];
+  ui?: string[];
+  storage?: string[];
+  importExport?: string[];
+  runtime?: string[];
   execution?: string | null;
+};
+
+type PluginSettingsPage = {
+  title: string;
+  sections: {
+    id: string;
+    title: string;
+    description?: string | null;
+    fields: {
+      key: string;
+      label: string;
+      type: string;
+      placeholder?: string | null;
+      help?: string | null;
+      default?: unknown;
+      options?: ParamOption[];
+    }[];
+  }[];
 };
 
 type RuntimeSourcePlugin = {
@@ -317,6 +339,7 @@ type RuntimeSourcePlugin = {
     routeTemplate: string;
     requiredCredentials?: string[];
   }[];
+  settingsPage?: PluginSettingsPage | null;
 };
 
 type PluginPack = {
@@ -749,6 +772,7 @@ let testModeRssHubSettings: RssHubSettings = {
   instances: defaultRssHubSettings.instances.map((instance) => ({ ...instance })),
 };
 let testModeInstalledPluginIds = new Set<string>(["official.naixi-forum.xpath"]);
+let testModePluginConfigs: Record<string, Record<string, unknown>> = {};
 let testModePluginMarkets: PluginMarket[] = [
   {
     id: "official-feaderhub",
@@ -1126,6 +1150,34 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
     case "uninstall_plugin":
       testModeInstalledPluginIds.delete(String(args?.pluginId ?? ""));
       return undefined as T;
+    case "get_plugin_config":
+      return (testModePluginConfigs[String(args?.pluginId ?? "")] ?? {}) as T;
+    case "set_plugin_config": {
+      const request = args?.request as { pluginId?: string; values?: Record<string, unknown> } | undefined;
+      const pluginId = String(request?.pluginId ?? "");
+      testModePluginConfigs[pluginId] = request?.values ?? {};
+      return testModePluginConfigs[pluginId] as T;
+    }
+    case "export_plugin_config": {
+      const pluginId = String(args?.pluginId ?? "");
+      return JSON.stringify(
+        {
+          schemaVersion: "feader-plugin-config/v1",
+          pluginId,
+          exportedAt: new Date().toISOString(),
+          values: testModePluginConfigs[pluginId] ?? {},
+        },
+        null,
+        2,
+      ) as T;
+    }
+    case "import_plugin_config": {
+      const request = args?.request as { pluginId?: string; json?: string } | undefined;
+      const parsed = JSON.parse(request?.json ?? "{}");
+      const values = parsed.schemaVersion === "feader-plugin-config/v1" ? parsed.values : parsed;
+      testModePluginConfigs[String(request?.pluginId ?? "")] = values;
+      return values as T;
+    }
     case "list_installed_plugin_packs":
       return testModeXPathRulePacks
         .filter((pack) => testModeInstalledPluginIds.has(pack.id))
@@ -2618,6 +2670,13 @@ function App() {
     () => viewPluginDefinitionsForKind(xpathRulePacks, "app-ui-theme"),
     [xpathRulePacks],
   );
+  const installedRuntimePlugins = useMemo(
+    () =>
+      xpathRulePacks.filter(
+        (pack) => isRuntimeSourcePluginPack(pack) && pack.installed && pack.runtime?.settingsPage,
+      ),
+    [xpathRulePacks],
+  );
   const installedSourceListPlugins = useMemo(
     () => sourceListPlugins.filter((plugin) => installedViewPlugins.includes(plugin.id)),
     [installedViewPlugins],
@@ -3720,6 +3779,14 @@ function App() {
               status={rssHubStatus}
             />
 
+            {installedRuntimePlugins.map((plugin) => (
+              <RuntimePluginSettingsCard
+                disabled={isBusy}
+                key={plugin.id}
+                plugin={plugin}
+              />
+            ))}
+
             <article className="settings-card">
               <div className="panel-heading">
                 <span>Workspace</span>
@@ -4304,6 +4371,168 @@ function RssHubSettingsCard({
           Add
         </button>
       </div>
+      {status ? <p className="xpath-status">{status}</p> : null}
+    </article>
+  );
+}
+
+function RuntimePluginSettingsCard({
+  disabled,
+  plugin,
+}: {
+  disabled: boolean;
+  plugin: MarketplacePluginPack;
+}) {
+  const page = plugin.runtime?.settingsPage;
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [importText, setImportText] = useState("");
+  const [exportText, setExportText] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<Record<string, unknown>>("get_plugin_config", { pluginId: plugin.id })
+      .then((next) => {
+        if (!cancelled) setValues(next);
+      })
+      .catch((error) => {
+        if (!cancelled) setStatus(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [plugin.id]);
+
+  if (!page) return null;
+
+  function setField(key: string, value: unknown): void {
+    setValues((current) => ({ ...current, [key]: value }));
+  }
+
+  async function save(): Promise<void> {
+    setStatus("Saving...");
+    try {
+      const saved = await invoke<Record<string, unknown>>("set_plugin_config", {
+        request: { pluginId: plugin.id, values },
+      });
+      setValues(saved);
+      setStatus("Settings saved");
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
+  async function exportConfig(): Promise<void> {
+    try {
+      const json = await invoke<string>("export_plugin_config", { pluginId: plugin.id });
+      setExportText(json);
+      setStatus("Export ready");
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
+  async function importConfig(): Promise<void> {
+    try {
+      const imported = await invoke<Record<string, unknown>>("import_plugin_config", {
+        request: { pluginId: plugin.id, json: importText },
+      });
+      setValues(imported);
+      setStatus("Config imported");
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
+  return (
+    <article className="settings-card">
+      <div className="panel-heading">
+        <span>{page.title}</span>
+        <span>{plugin.runtime?.runtime.engine ?? "Runtime"}</span>
+      </div>
+      {page.sections.map((section) => (
+        <section className="plugin-settings-section" key={section.id}>
+          <div className="panel-subheading">
+            <span>{section.title}</span>
+            {section.description ? <small>{section.description}</small> : null}
+          </div>
+          {section.fields.map((field) => (
+            <label className="selector-input" key={field.key}>
+              <span>{field.label}</span>
+              {field.type === "boolean" ? (
+                <input
+                  checked={Boolean(values[field.key] ?? field.default ?? false)}
+                  disabled={disabled}
+                  onChange={(event) => setField(field.key, event.currentTarget.checked)}
+                  type="checkbox"
+                />
+              ) : field.type === "select" && field.options ? (
+                <select
+                  disabled={disabled}
+                  onChange={(event) => setField(field.key, event.currentTarget.value)}
+                  value={String(values[field.key] ?? field.default ?? "")}
+                >
+                  {field.options.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : field.type === "secret" ? (
+                <input
+                  disabled
+                  placeholder="Secrets are stored through plugin credentials and are not exported."
+                  type="password"
+                />
+              ) : (
+                <input
+                  disabled={disabled}
+                  onChange={(event) =>
+                    setField(
+                      field.key,
+                      field.type === "number"
+                        ? Number(event.currentTarget.value)
+                        : event.currentTarget.value,
+                    )
+                  }
+                  placeholder={field.placeholder ?? undefined}
+                  type={field.type === "number" ? "number" : "text"}
+                  value={String(values[field.key] ?? field.default ?? "")}
+                />
+              )}
+              {field.help ? <small className="selector-hint">{field.help}</small> : null}
+            </label>
+          ))}
+        </section>
+      ))}
+      <div className="ai-actions">
+        <button className="primary-action" disabled={disabled} onClick={() => void save()} type="button">
+          Save plugin settings
+        </button>
+        <button className="secondary-action" disabled={disabled} onClick={() => void exportConfig()} type="button">
+          Export config
+        </button>
+      </div>
+      {exportText ? (
+        <textarea
+          className="plugin-config-textarea"
+          readOnly
+          value={exportText}
+        />
+      ) : null}
+      <label className="selector-input">
+        <span>Import config</span>
+        <textarea
+          className="plugin-config-textarea"
+          disabled={disabled}
+          onChange={(event) => setImportText(event.currentTarget.value)}
+          placeholder='{"schemaVersion":"feader-plugin-config/v1",...}'
+          value={importText}
+        />
+      </label>
+      <button className="secondary-action" disabled={disabled || !importText.trim()} onClick={() => void importConfig()} type="button">
+        Import config
+      </button>
       {status ? <p className="xpath-status">{status}</p> : null}
     </article>
   );
