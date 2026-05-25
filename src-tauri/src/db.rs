@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension, ToSql};
+use url::Url;
 
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
@@ -15,6 +16,19 @@ use crate::models::{
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
 const WALLET_CHALLENGE_TTL_MINUTES: i64 = 10;
+const TRACKING_QUERY_PARAMS: &[&str] = &[
+    "fbclid",
+    "gclid",
+    "igshid",
+    "mc_cid",
+    "mc_eid",
+    "spm",
+    "utm_campaign",
+    "utm_content",
+    "utm_medium",
+    "utm_source",
+    "utm_term",
+];
 
 /// Thread-safe application database handle.
 pub struct AppDatabase {
@@ -682,18 +696,69 @@ impl AppDatabase {
 
         for article in articles {
             let content_html = article.content_html.as_deref().map(sanitize_html);
-            transaction
-                .execute(
-                    "
+            let dedupe_key = article_dedupe_key(article);
+            let existing_id = transaction
+                .query_row(
+                    "SELECT id FROM articles WHERE source_id = ?1 AND dedupe_key = ?2",
+                    params![source_id, dedupe_key],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+
+            if let Some(article_id) = existing_id {
+                transaction
+                    .execute(
+                        "
+                        UPDATE articles
+                        SET
+                            external_id = COALESCE(?2, external_id),
+                            title = ?3,
+                            url = ?4,
+                            canonical_url = ?5,
+                            summary = ?6,
+                            content_html = ?7,
+                            content_text = ?8,
+                            author = ?9,
+                            published_at = ?10,
+                            image_url = ?11,
+                            tags_json = ?12,
+                            dedupe_key = ?13,
+                            updated_at = ?14
+                        WHERE id = ?1
+                        ",
+                        params![
+                            article_id,
+                            article.external_id,
+                            article.title,
+                            article.url,
+                            article.canonical_url,
+                            article.summary,
+                            content_html,
+                            article.content_text,
+                            article.author,
+                            article.published_at,
+                            article.image_url,
+                            article.tags_json,
+                            dedupe_key,
+                            now
+                        ],
+                    )
+                    .map_err(|error| error.to_string())?;
+            } else {
+                transaction
+                    .execute(
+                        "
                     INSERT INTO articles (
                         source_id, external_id, title, url, canonical_url, summary,
                         content_html, content_text, author, published_at, image_url,
-                        tags_json, created_at, updated_at
+                        tags_json, dedupe_key, created_at, updated_at
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)
                     ON CONFLICT(source_id, url) DO UPDATE SET
                         external_id = COALESCE(excluded.external_id, articles.external_id),
                         title = excluded.title,
+                        dedupe_key = excluded.dedupe_key,
                         canonical_url = excluded.canonical_url,
                         summary = excluded.summary,
                         content_html = excluded.content_html,
@@ -704,23 +769,25 @@ impl AppDatabase {
                         tags_json = excluded.tags_json,
                         updated_at = excluded.updated_at
                     ",
-                    params![
-                        source_id,
-                        article.external_id,
-                        article.title,
-                        article.url,
-                        article.canonical_url,
-                        article.summary,
-                        content_html,
-                        article.content_text,
-                        article.author,
-                        article.published_at,
-                        article.image_url,
-                        article.tags_json,
-                        now
-                    ],
-                )
-                .map_err(|error| error.to_string())?;
+                        params![
+                            source_id,
+                            article.external_id,
+                            article.title,
+                            article.url,
+                            article.canonical_url,
+                            article.summary,
+                            content_html,
+                            article.content_text,
+                            article.author,
+                            article.published_at,
+                            article.image_url,
+                            article.tags_json,
+                            dedupe_key,
+                            now
+                        ],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
         }
 
         transaction.commit().map_err(|error| error.to_string())?;
@@ -1041,6 +1108,7 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
             published_at TEXT,
             image_url TEXT,
             tags_json TEXT,
+            dedupe_key TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(source_id, url)
@@ -1147,6 +1215,13 @@ fn initialize_schema(connection: &Connection) -> rusqlite::Result<()> {
         "refresh_interval_seconds",
         "ALTER TABLE sources ADD COLUMN refresh_interval_seconds INTEGER",
     )?;
+    add_column_if_missing(
+        connection,
+        "articles",
+        "dedupe_key",
+        "ALTER TABLE articles ADD COLUMN dedupe_key TEXT",
+    )?;
+    migrate_article_dedupe_keys(connection)?;
 
     // Seed defaults for auto-refresh settings.
     connection.execute(
@@ -1177,6 +1252,177 @@ fn add_column_if_missing(
     if !exists {
         connection.execute(statement, [])?;
     }
+    Ok(())
+}
+
+fn migrate_article_dedupe_keys(connection: &Connection) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(
+        "
+        SELECT id, external_id, url, canonical_url
+        FROM articles
+        WHERE dedupe_key IS NULL OR dedupe_key = ''
+        ",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let articles = rows.collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (id, external_id, url, canonical_url) in articles {
+        let dedupe_key =
+            article_dedupe_key_from_parts(external_id.as_deref(), canonical_url.as_deref(), &url);
+        connection.execute(
+            "UPDATE articles SET dedupe_key = ?1 WHERE id = ?2",
+            params![dedupe_key, id],
+        )?;
+    }
+
+    merge_duplicate_articles(connection)?;
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_source_dedupe_key ON articles(source_id, dedupe_key)",
+        [],
+    )?;
+    Ok(())
+}
+
+fn merge_duplicate_articles(connection: &Connection) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(
+        "
+        SELECT source_id, dedupe_key
+        FROM articles
+        WHERE dedupe_key IS NOT NULL AND dedupe_key != ''
+        GROUP BY source_id, dedupe_key
+        HAVING COUNT(*) > 1
+        ",
+    )?;
+    let duplicate_keys = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+
+    for (source_id, dedupe_key) in duplicate_keys {
+        let ids = {
+            let mut ids_statement = connection.prepare(
+                "
+                SELECT id
+                FROM articles
+                WHERE source_id = ?1 AND dedupe_key = ?2
+                ORDER BY id ASC
+                ",
+            )?;
+            let ids = ids_statement
+                .query_map(params![source_id, dedupe_key], |row| row.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            ids
+        };
+        let Some((&keep_id, redundant_ids)) = ids.split_first() else {
+            continue;
+        };
+        let latest_id = *ids.last().unwrap_or(&keep_id);
+        let latest = connection.query_row(
+            "
+            SELECT
+                external_id, title, url, canonical_url, summary, content_html,
+                content_text, author, published_at, image_url, tags_json, updated_at
+            FROM articles
+            WHERE id = ?1
+            ",
+            [latest_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, String>(11)?,
+                ))
+            },
+        )?;
+
+        let merged_state = connection.query_row(
+            "
+            SELECT
+                MAX(COALESCE(article_states.read, 0)),
+                MAX(COALESCE(article_states.saved, 0)),
+                MAX(article_states.updated_at)
+            FROM articles
+            LEFT JOIN article_states ON article_states.article_id = articles.id
+            WHERE articles.source_id = ?1 AND articles.dedupe_key = ?2
+            ",
+            params![source_id, dedupe_key],
+            |row| {
+                Ok((
+                    row.get::<_, Option<bool>>(0)?.unwrap_or(false),
+                    row.get::<_, Option<bool>>(1)?.unwrap_or(false),
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        if merged_state.0 || merged_state.1 {
+            connection.execute(
+                "
+                INSERT INTO article_states (article_id, read, saved, updated_at)
+                VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(article_id) DO UPDATE SET
+                    read = excluded.read,
+                    saved = excluded.saved,
+                    updated_at = excluded.updated_at
+                ",
+                params![
+                    keep_id,
+                    merged_state.0,
+                    merged_state.1,
+                    merged_state.2.unwrap_or_else(now_string)
+                ],
+            )?;
+        }
+
+        for id in redundant_ids {
+            connection.execute("DELETE FROM articles WHERE id = ?1", [id])?;
+        }
+
+        if latest_id != keep_id {
+            connection.execute(
+                "
+                UPDATE articles
+                SET
+                    external_id = COALESCE(?2, external_id),
+                    title = ?3,
+                    url = ?4,
+                    canonical_url = ?5,
+                    summary = ?6,
+                    content_html = ?7,
+                    content_text = ?8,
+                    author = ?9,
+                    published_at = ?10,
+                    image_url = ?11,
+                    tags_json = ?12,
+                    updated_at = ?13
+                WHERE id = ?1
+                ",
+                params![
+                    keep_id, latest.0, latest.1, latest.2, latest.3, latest.4, latest.5, latest.6,
+                    latest.7, latest.8, latest.9, latest.10, latest.11
+                ],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1312,6 +1558,59 @@ fn now_string() -> String {
 
 fn sanitize_html(value: &str) -> String {
     ammonia::clean(value)
+}
+
+fn article_dedupe_key(article: &ParsedArticle) -> String {
+    article_dedupe_key_from_parts(
+        article.external_id.as_deref(),
+        article.canonical_url.as_deref(),
+        &article.url,
+    )
+}
+
+fn article_dedupe_key_from_parts(
+    external_id: Option<&str>,
+    canonical_url: Option<&str>,
+    url: &str,
+) -> String {
+    if let Some(external_id) = external_id.map(str::trim).filter(|value| !value.is_empty()) {
+        return format!("guid:{external_id}");
+    }
+
+    let url = canonical_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(url);
+    format!("url:{}", normalize_article_url(url))
+}
+
+fn normalize_article_url(value: &str) -> String {
+    let trimmed = value.trim();
+    let Ok(mut url) = Url::parse(trimmed) else {
+        return trimmed.split('#').next().unwrap_or(trimmed).to_string();
+    };
+    url.set_fragment(None);
+
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(key, _)| !is_tracking_query_param(key))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    pairs.sort();
+
+    url.set_query(None);
+    if !pairs.is_empty() {
+        let mut serializer = url.query_pairs_mut();
+        for (key, value) in pairs {
+            serializer.append_pair(&key, &value);
+        }
+    }
+
+    url.to_string()
+}
+
+fn is_tracking_query_param(key: &str) -> bool {
+    key.starts_with("utm_") || TRACKING_QUERY_PARAMS.contains(&key)
 }
 
 #[cfg(test)]
@@ -1473,6 +1772,198 @@ mod tests {
 
         assert!(updated.read);
         assert_eq!(updated.summary.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn article_upsert_uses_external_id_when_feed_link_changes() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://www.v2ex.com/feed/openai.xml", Some("OpenAI"))
+            .expect("source inserts");
+        let article = ParsedArticle {
+            external_id: Some("tag:www.v2ex.com,2026-05-24:/t/1215096".to_string()),
+            title: "API access".to_string(),
+            url: "https://www.v2ex.com/t/1215096#reply21".to_string(),
+            canonical_url: None,
+            summary: Some("Before".to_string()),
+            content_html: None,
+            content_text: None,
+            author: None,
+            published_at: Some("2026-05-24T09:12:25+00:00".to_string()),
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article.clone()])
+            .expect("article inserts");
+        let inserted = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list")[0]
+            .clone();
+        database
+            .mark_article_read(inserted.id, true)
+            .expect("read state updates");
+        database
+            .save_article(inserted.id, true)
+            .expect("saved state updates");
+
+        let mut changed = article;
+        changed.url = "https://www.v2ex.com/t/1215096#reply34".to_string();
+        changed.summary = Some("After".to_string());
+        database
+            .upsert_articles(source.id, None, &[changed])
+            .expect("article updates");
+
+        let articles = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list");
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].url, "https://www.v2ex.com/t/1215096#reply34");
+        assert_eq!(articles[0].summary.as_deref(), Some("After"));
+        assert!(articles[0].read);
+        assert!(articles[0].saved);
+    }
+
+    #[test]
+    fn article_upsert_normalizes_url_fragment_when_guid_is_missing() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("source inserts");
+        let mut article = ParsedArticle {
+            external_id: None,
+            title: "Fragmented".to_string(),
+            url: "https://example.com/post?id=42#reply1".to_string(),
+            canonical_url: None,
+            summary: Some("Before".to_string()),
+            content_html: None,
+            content_text: None,
+            author: None,
+            published_at: None,
+            image_url: None,
+            tags_json: None,
+        };
+
+        database
+            .upsert_articles(source.id, None, &[article.clone()])
+            .expect("article inserts");
+        article.url = "https://example.com/post?id=42#reply2".to_string();
+        article.summary = Some("After".to_string());
+        database
+            .upsert_articles(source.id, None, &[article])
+            .expect("article updates");
+
+        let articles = database
+            .list_articles(ArticleFilter::default())
+            .expect("articles list");
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].url, "https://example.com/post?id=42#reply2");
+        assert_eq!(articles[0].summary.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn article_url_normalization_keeps_identity_query_params() {
+        assert_eq!(
+            normalize_article_url("https://www.huanqiukexue.com/?utm_source=x&p=4137#comments"),
+            "https://www.huanqiukexue.com/?p=4137"
+        );
+        assert_eq!(
+            normalize_article_url("https://example.com/thread?utm_medium=rss&tid=7272735"),
+            "https://example.com/thread?tid=7272735"
+        );
+    }
+
+    #[test]
+    fn schema_migration_merges_existing_external_id_duplicates() {
+        let connection = Connection::open_in_memory().expect("sqlite opens");
+        connection
+            .execute_batch(
+                "
+                PRAGMA foreign_keys = ON;
+                CREATE TABLE sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL DEFAULT 'rss',
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL UNIQUE,
+                    config_json TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_fetched_at TEXT,
+                    last_error TEXT,
+                    category TEXT,
+                    refresh_interval_seconds INTEGER
+                );
+                CREATE TABLE articles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                    external_id TEXT,
+                    title TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    canonical_url TEXT,
+                    summary TEXT,
+                    content_html TEXT,
+                    content_text TEXT,
+                    author TEXT,
+                    published_at TEXT,
+                    image_url TEXT,
+                    tags_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(source_id, url)
+                );
+                CREATE TABLE article_states (
+                    article_id INTEGER PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
+                    read INTEGER NOT NULL DEFAULT 0,
+                    saved INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO sources (id, title, url, created_at, updated_at)
+                VALUES (1, 'OpenAI', 'https://www.v2ex.com/feed/openai.xml', 'now', 'now');
+                INSERT INTO articles (
+                    id, source_id, external_id, title, url, created_at, updated_at
+                )
+                VALUES
+                    (10, 1, 'same-guid', 'Old', 'https://www.v2ex.com/t/1#reply1', 'old', 'old'),
+                    (11, 1, 'same-guid', 'New', 'https://www.v2ex.com/t/1#reply2', 'new', 'new');
+                INSERT INTO article_states (article_id, read, saved, updated_at)
+                VALUES (10, 1, 0, 'old'), (11, 0, 1, 'new');
+                ",
+            )
+            .expect("old schema seeds");
+
+        initialize_schema(&connection).expect("schema migrates");
+
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))
+            .expect("count loads");
+        let row = connection
+            .query_row(
+                "
+                SELECT articles.id, articles.title, articles.url, article_states.read, article_states.saved
+                FROM articles
+                LEFT JOIN article_states ON article_states.article_id = articles.id
+                ",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )
+            .expect("merged article loads");
+
+        assert_eq!(count, 1);
+        assert_eq!(row.0, 10);
+        assert_eq!(row.1, "New");
+        assert_eq!(row.2, "https://www.v2ex.com/t/1#reply2");
+        assert!(row.3);
+        assert!(row.4);
     }
 
     #[test]
