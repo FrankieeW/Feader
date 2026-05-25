@@ -731,6 +731,26 @@ select:disabled {
   min-height: 92px;
 }
 
+.runtime-plugin-settings.selected {
+  border-color: var(--color-action);
+  box-shadow: 0 0 0 3px var(--color-selected-ring);
+}
+
+.runtime-permission-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.runtime-permission-strip span {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--color-muted);
+  background: var(--color-panel-soft);
+  font-size: 11px;
+}
+
 .rsshub-instance-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

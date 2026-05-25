@@ -1552,6 +1552,7 @@ function App() {
   const [pluginMarketName, setPluginMarketName] = useState("");
   const [pluginInstallUrl, setPluginInstallUrl] = useState("");
   const [pluginTemplateStatus, setPluginTemplateStatus] = useState<string | null>(null);
+  const [selectedRuntimePluginId, setSelectedRuntimePluginId] = useState<string | null>(null);
   const [hubSearchQuery, setHubSearchQuery] = useState("");
   const [hubInstallFilter, setHubInstallFilter] = useState<HubInstallFilter>("all");
   const [hubGroup, setHubGroup] = useState<"all" | "sources" | "appearance">("all");
@@ -1877,6 +1878,9 @@ function App() {
   function openPluginDialog(pack: PluginPack): void {
     const xpath = pack.xpath;
     if (!xpath) {
+      if (pack.runtime) {
+        setSelectedRuntimePluginId(pack.id);
+      }
       setActiveView(pack.runtime ? "settings" : activeView);
       setStatus(
         pack.runtime
@@ -2008,6 +2012,10 @@ function App() {
         request: { marketId: pack.sourceMarketId, pluginId: pack.id },
       });
       await loadXPathPluginPacks(false);
+      if (isRuntimeSourcePluginPack(pack)) {
+        setSelectedRuntimePluginId(pack.id);
+        setActiveView("settings");
+      }
       setStatus(`Installed plugin: ${pack.name}`);
     });
   }
@@ -3784,6 +3792,7 @@ function App() {
                 disabled={isBusy}
                 key={plugin.id}
                 plugin={plugin}
+                selected={selectedRuntimePluginId === plugin.id}
               />
             ))}
 
@@ -4379,21 +4388,30 @@ function RssHubSettingsCard({
 function RuntimePluginSettingsCard({
   disabled,
   plugin,
+  selected,
 }: {
   disabled: boolean;
   plugin: MarketplacePluginPack;
+  selected: boolean;
 }) {
   const page = plugin.runtime?.settingsPage;
   const [values, setValues] = useState<Record<string, unknown>>({});
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
+  const [credential, setCredential] = useState<PluginCredential | null>(null);
   const [importText, setImportText] = useState("");
   const [exportText, setExportText] = useState("");
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    invoke<Record<string, unknown>>("get_plugin_config", { pluginId: plugin.id })
-      .then((next) => {
-        if (!cancelled) setValues(next);
+    Promise.all([
+      invoke<Record<string, unknown>>("get_plugin_config", { pluginId: plugin.id }),
+      invoke<PluginCredential>("get_plugin_credential", { pluginId: plugin.id }),
+    ])
+      .then(([next, nextCredential]) => {
+        if (cancelled) return;
+        setValues(applyPluginSettingDefaults(page, next));
+        setCredential(nextCredential);
       })
       .catch((error) => {
         if (!cancelled) setStatus(String(error));
@@ -4405,17 +4423,28 @@ function RuntimePluginSettingsCard({
 
   if (!page) return null;
 
+  const resolvedValues = applyPluginSettingDefaults(page, values);
+
   function setField(key: string, value: unknown): void {
-    setValues((current) => ({ ...current, [key]: value }));
+    setValues((current) => ({ ...applyPluginSettingDefaults(page, current), [key]: value }));
   }
 
   async function save(): Promise<void> {
     setStatus("Saving...");
     try {
       const saved = await invoke<Record<string, unknown>>("set_plugin_config", {
-        request: { pluginId: plugin.id, values },
+        request: { pluginId: plugin.id, values: resolvedValues },
       });
-      setValues(saved);
+      setValues(applyPluginSettingDefaults(page, saved));
+      const secret = firstNonEmptySecret(secretValues);
+      if (secret) {
+        const updated = await invoke<PluginCredential>("set_plugin_credential", {
+          pluginId: plugin.id,
+          cookie: secret,
+        });
+        setCredential(updated);
+        setSecretValues({});
+      }
       setStatus("Settings saved");
     } catch (error) {
       setStatus(String(error));
@@ -4437,7 +4466,7 @@ function RuntimePluginSettingsCard({
       const imported = await invoke<Record<string, unknown>>("import_plugin_config", {
         request: { pluginId: plugin.id, json: importText },
       });
-      setValues(imported);
+      setValues(applyPluginSettingDefaults(page, imported));
       setStatus("Config imported");
     } catch (error) {
       setStatus(String(error));
@@ -4445,10 +4474,24 @@ function RuntimePluginSettingsCard({
   }
 
   return (
-    <article className="settings-card">
+    <article className={`settings-card runtime-plugin-settings ${selected ? "selected" : ""}`}>
       <div className="panel-heading">
         <span>{page.title}</span>
         <span>{plugin.runtime?.runtime.engine ?? "Runtime"}</span>
+      </div>
+      <div className="runtime-permission-strip" aria-label={`${plugin.name} permissions`}>
+        {plugin.permissions?.ui?.map((permission) => (
+          <span key={`ui-${permission}`}>UI: {permission}</span>
+        ))}
+        {plugin.permissions?.storage?.map((permission) => (
+          <span key={`storage-${permission}`}>Storage: {permission}</span>
+        ))}
+        {plugin.permissions?.importExport?.map((permission) => (
+          <span key={`import-${permission}`}>Import/export: {permission}</span>
+        ))}
+        {plugin.permissions?.runtime?.map((permission) => (
+          <span key={`runtime-${permission}`}>Runtime: {permission}</span>
+        ))}
       </div>
       {page.sections.map((section) => (
         <section className="plugin-settings-section" key={section.id}>
@@ -4461,7 +4504,7 @@ function RuntimePluginSettingsCard({
               <span>{field.label}</span>
               {field.type === "boolean" ? (
                 <input
-                  checked={Boolean(values[field.key] ?? field.default ?? false)}
+                  checked={Boolean(resolvedValues[field.key] ?? false)}
                   disabled={disabled}
                   onChange={(event) => setField(field.key, event.currentTarget.checked)}
                   type="checkbox"
@@ -4470,7 +4513,7 @@ function RuntimePluginSettingsCard({
                 <select
                   disabled={disabled}
                   onChange={(event) => setField(field.key, event.currentTarget.value)}
-                  value={String(values[field.key] ?? field.default ?? "")}
+                  value={String(resolvedValues[field.key] ?? "")}
                 >
                   {field.options.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -4479,11 +4522,27 @@ function RuntimePluginSettingsCard({
                   ))}
                 </select>
               ) : field.type === "secret" ? (
-                <input
-                  disabled
-                  placeholder="Secrets are stored through plugin credentials and are not exported."
-                  type="password"
-                />
+                <>
+                  <input
+                    disabled={disabled}
+                    onChange={(event) =>
+                      setSecretValues((current) => ({
+                        ...current,
+                        [field.key]: event.currentTarget.value,
+                      }))
+                    }
+                    placeholder={
+                      credential?.cookieSet
+                        ? "Secret saved - type to replace"
+                        : "Paste secret or env reference"
+                    }
+                    type="password"
+                    value={secretValues[field.key] ?? ""}
+                  />
+                  <small className="selector-hint">
+                    Secrets are stored in Feader credentials and are excluded from config export.
+                  </small>
+                </>
               ) : (
                 <input
                   disabled={disabled}
@@ -4497,7 +4556,7 @@ function RuntimePluginSettingsCard({
                   }
                   placeholder={field.placeholder ?? undefined}
                   type={field.type === "number" ? "number" : "text"}
-                  value={String(values[field.key] ?? field.default ?? "")}
+                  value={String(resolvedValues[field.key] ?? "")}
                 />
               )}
               {field.help ? <small className="selector-hint">{field.help}</small> : null}
@@ -4536,6 +4595,31 @@ function RuntimePluginSettingsCard({
       {status ? <p className="xpath-status">{status}</p> : null}
     </article>
   );
+}
+
+function applyPluginSettingDefaults(
+  page: PluginSettingsPage | null | undefined,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!page) return values;
+  const next = { ...values };
+  for (const section of page.sections) {
+    for (const field of section.fields) {
+      if (field.type === "secret") continue;
+      if (next[field.key] === undefined && field.default !== undefined) {
+        next[field.key] = field.default;
+      }
+    }
+  }
+  return next;
+}
+
+function firstNonEmptySecret(values: Record<string, string>): string | null {
+  for (const value of Object.values(values)) {
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
 }
 
 function EntryLayoutControl({
