@@ -78,7 +78,7 @@ type ReaderView = "none" | "preview" | "immersive";
 type AppUiPluginId = string;
 type AppUiThemeByMode = { light: AppUiPluginId | null; dark: AppUiPluginId | null };
 type SourceListPluginId = "image-board" | "social-stream" | "dense-radar";
-type HubInstallFilter = "all" | "installed" | "not-installed";
+type HubInstallFilter = "all" | "installed" | "not-installed" | "needs-update";
 type DetailViewPluginId = "magazine" | "focus" | "research" | "cinema";
 type PaneKey = "sidebar" | "timeline";
 type ReaderVideo =
@@ -1650,6 +1650,17 @@ function App() {
         : pack.installed;
       if (hubInstallFilter === "installed" && !packInstalled) return false;
       if (hubInstallFilter === "not-installed" && packInstalled) return false;
+      if (hubInstallFilter === "needs-update") {
+        if (!packInstalled) return false;
+        const installedVersion = isViewPluginPack(pack)
+          ? installedViewPluginVersions[viewPluginIdFromPack(pack)] ?? null
+          : pack.installedVersion ?? null;
+        if (!installedVersion) {
+          if (!(isViewPluginPack(pack) && Boolean(pack.sourceMarketId))) return false;
+        } else if (comparePluginVersions(pack.version, installedVersion) <= 0) {
+          return false;
+        }
+      }
       if (!query) return true;
       return (
         pack.name.toLowerCase().includes(query) ||
@@ -1658,7 +1669,7 @@ function App() {
         pack.capabilities.some((cap) => cap.toLowerCase().includes(query))
       );
     });
-  }, [xpathRulePacks, hubSearchQuery, hubGroup, hubCategory, hubInstallFilter, installedViewPlugins]);
+  }, [xpathRulePacks, hubSearchQuery, hubGroup, hubCategory, hubInstallFilter, installedViewPlugins, installedViewPluginVersions]);
 
   const officialPacks = useMemo(
     () => filteredPacks.filter((p) => p.trust === "bundled-official" || p.trust === "official"),
@@ -3090,13 +3101,13 @@ function App() {
           </div>
 
           <nav className="hub-categories" aria-label="Install status">
-            {(["all", "installed", "not-installed"] as const).map((filter) => (
+            {(["all", "installed", "not-installed", "needs-update"] as const).map((filter) => (
               <button
                 className={`hub-category-chip ${hubInstallFilter === filter ? "active" : ""}`}
                 key={filter}
                 onClick={() => setHubInstallFilter(filter)}
               >
-                {filter === "all" ? "All" : filter === "installed" ? "Installed" : "Not Installed"}
+                {filter === "all" ? "All" : filter === "installed" ? "Installed" : filter === "not-installed" ? "Not Installed" : "Needs Update"}
               </button>
             ))}
           </nav>
