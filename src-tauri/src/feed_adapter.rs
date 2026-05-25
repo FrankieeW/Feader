@@ -35,6 +35,7 @@ fn feed_http_client() -> &'static Client {
     FEED_CLIENT.get_or_init(|| {
         Client::builder()
             .emulation(Emulation::Chrome133)
+            .http1_only()
             .build()
             .expect("feed HTTP client configuration is valid")
     })
