@@ -9,8 +9,8 @@ use url::Url;
 
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
-    PluginRefreshOverride, RssHubSourceConfig, Source, WalletLoginChallenge, WalletSession,
-    XPathRulePack, XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB,
+    PluginPack, PluginRefreshOverride, RssHubSourceConfig, Source, WalletLoginChallenge,
+    WalletSession, XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB,
     SOURCE_KIND_XPATH,
 };
 
@@ -325,7 +325,7 @@ impl AppDatabase {
     }
 
     /// Persist an installed static plugin pack locally.
-    pub fn install_plugin_pack(&self, pack: &XPathRulePack) -> Result<(), String> {
+    pub fn install_plugin_pack(&self, pack: &PluginPack) -> Result<(), String> {
         let json = serde_json::to_string(pack).map_err(|error| error.to_string())?;
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
         connection
@@ -355,7 +355,7 @@ impl AppDatabase {
     }
 
     /// Return all installed plugin packs.
-    pub fn list_installed_plugin_packs(&self) -> Result<Vec<XPathRulePack>, String> {
+    pub fn list_installed_plugin_packs(&self) -> Result<Vec<PluginPack>, String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
         let mut statement = connection
             .prepare("SELECT pack_json FROM installed_plugin_packs ORDER BY installed_at DESC")
@@ -365,7 +365,7 @@ impl AppDatabase {
             .map_err(|error| error.to_string())?;
         rows.map(|row| {
             let json = row.map_err(|error| error.to_string())?;
-            serde_json::from_str::<XPathRulePack>(&json).map_err(|error| error.to_string())
+            serde_json::from_str::<PluginPack>(&json).map_err(|error| error.to_string())
         })
         .collect()
     }
@@ -2187,9 +2187,10 @@ mod tests {
             .into_iter()
             .next()
             .expect("bundled pack exists");
+        let plugin = crate::plugin_registry::plugin_pack_from_xpath_rule_pack(pack.clone());
 
         database
-            .install_plugin_pack(&pack)
+            .install_plugin_pack(&plugin)
             .expect("plugin installs");
         let installed = database
             .list_installed_plugin_packs()

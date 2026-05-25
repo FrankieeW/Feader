@@ -6,13 +6,13 @@ use std::fs;
 use tauri::Manager;
 
 use crate::db::AppDatabase;
+use crate::error::Result;
 use crate::models::{
     AddPluginMarketRequest, InstallPluginFromMarketRequest, InstallPluginFromUrlRequest,
-    MarketplacePluginPack, PluginMarket, PluginMarketTemplate, RegistryIndex, RegistryPluginEntry,
-    XPathRulePack, PLUGIN_KIND_APP_UI_THEME,
+    MarketplacePluginPack, PluginMarket, PluginMarketTemplate, PluginPack, RegistryIndex,
+    RegistryPluginEntry, XPathRulePack, PLUGIN_KIND_APP_UI_THEME,
 };
 use crate::plugin_registry;
-use crate::error::Result;
 
 const REGISTRY_CACHE_TTL_SECONDS: i64 = 86_400; // 24 hours
 const PLUGIN_MARKETS_KEY: &str = "plugin_markets";
@@ -64,7 +64,7 @@ async fn load_registry_packs(
             } else {
                 database
                     .get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)?
-                    .and_then(|cached| serde_json::from_str::<XPathRulePack>(&cached).ok())
+                    .and_then(|cached| serde_json::from_str::<PluginPack>(&cached).ok())
                     .filter(|pack| cached_plugin_pack_is_usable(pack))
             };
 
@@ -161,8 +161,8 @@ fn market_plugin_cache_key(market_id: &str, entry: &RegistryPluginEntry) -> Stri
     )
 }
 
-fn cached_plugin_pack_is_usable(pack: &XPathRulePack) -> bool {
-    pack.kind != PLUGIN_KIND_APP_UI_THEME || pack.tokens.is_some()
+fn cached_plugin_pack_is_usable(pack: &PluginPack) -> bool {
+    pack.kind != PLUGIN_KIND_APP_UI_THEME || pack.view.is_some()
 }
 
 fn installed_plugin_versions(database: &AppDatabase) -> Result<HashMap<String, String>> {
@@ -191,9 +191,7 @@ fn save_plugin_markets(database: &AppDatabase, markets: &[PluginMarket]) -> Resu
 }
 
 #[tauri::command]
-pub fn list_plugin_markets(
-    database: tauri::State<'_, AppDatabase>,
-) -> Result<Vec<PluginMarket>> {
+pub fn list_plugin_markets(database: tauri::State<'_, AppDatabase>) -> Result<Vec<PluginMarket>> {
     load_plugin_markets(&database)
 }
 
@@ -217,7 +215,7 @@ pub async fn add_plugin_market(
 pub async fn install_plugin_from_market(
     request: InstallPluginFromMarketRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathRulePack> {
+) -> Result<PluginPack> {
     let markets = load_plugin_markets(&database)?;
     let market = markets
         .into_iter()
@@ -231,7 +229,7 @@ pub async fn install_plugin_from_market(
         .ok_or_else(|| "Plugin not found in market".to_string())?;
     let cache_key = market_plugin_cache_key(&market.id, &entry);
     let pack = match database.get_cache(&cache_key, REGISTRY_CACHE_TTL_SECONDS)? {
-        Some(cached) => serde_json::from_str::<XPathRulePack>(&cached)
+        Some(cached) => serde_json::from_str::<PluginPack>(&cached)
             .ok()
             .filter(|pack| cached_plugin_pack_is_usable(pack)),
         None => None,
@@ -255,17 +253,14 @@ pub async fn install_plugin_from_market(
 pub async fn install_plugin_from_url(
     request: InstallPluginFromUrlRequest,
     database: tauri::State<'_, AppDatabase>,
-) -> Result<XPathRulePack> {
+) -> Result<PluginPack> {
     let pack = plugin_registry::fetch_plugin_pack_from_url(&request.url).await?;
     database.install_plugin_pack(&pack)?;
     Ok(pack)
 }
 
 #[tauri::command]
-pub fn uninstall_plugin(
-    plugin_id: String,
-    database: tauri::State<'_, AppDatabase>,
-) -> Result<()> {
+pub fn uninstall_plugin(plugin_id: String, database: tauri::State<'_, AppDatabase>) -> Result<()> {
     Ok(database.uninstall_plugin_pack(&plugin_id)?)
 }
 
@@ -274,14 +269,17 @@ pub fn list_installed_plugin_packs(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<XPathRulePack>> {
     let mut packs = plugin_registry::bundled_xpath_rule_packs();
-    packs.extend(database.list_installed_plugin_packs()?);
+    packs.extend(
+        database
+            .list_installed_plugin_packs()?
+            .into_iter()
+            .filter_map(|pack| pack.xpath),
+    );
     Ok(packs)
 }
 
 #[tauri::command]
-pub fn create_plugin_market_template(
-    app_handle: tauri::AppHandle,
-) -> Result<PluginMarketTemplate> {
+pub fn create_plugin_market_template(app_handle: tauri::AppHandle) -> Result<PluginMarketTemplate> {
     let root = app_handle
         .path()
         .app_data_dir()

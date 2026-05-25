@@ -293,7 +293,60 @@ type XPathRulePack = {
   tokens?: Record<string, string> | null;
 };
 
-type MarketplacePluginPack = XPathRulePack & {
+type PluginPermissions = {
+  network?: string[];
+  credentials?: string[];
+  execution?: string | null;
+};
+
+type RuntimeSourcePlugin = {
+  schemaVersion: string;
+  id: string;
+  name: string;
+  version: string;
+  runtime: {
+    engine: string;
+    package?: string | null;
+    version?: string | null;
+    entry?: string | null;
+  };
+  capabilities: string[];
+  routeTemplates?: {
+    id: string;
+    label: string;
+    routeTemplate: string;
+    requiredCredentials?: string[];
+  }[];
+};
+
+type PluginPack = {
+  id: string;
+  name: string;
+  version: string;
+  apiVersion: string;
+  kind: string;
+  registry: string;
+  trust: string;
+  description: string;
+  logo?: string | null;
+  capabilities: string[];
+  authors?: PluginAuthor[];
+  permissions?: PluginPermissions | null;
+  xpath?: XPathRulePack | null;
+  view?: {
+    schemaVersion: string;
+    id: string;
+    name: string;
+    version: string;
+    slot: string;
+    description?: string | null;
+    capabilities: string[];
+    tokens?: Record<string, string> | null;
+  } | null;
+  runtime?: RuntimeSourcePlugin | null;
+};
+
+type MarketplacePluginPack = PluginPack & {
   installed: boolean;
   installedVersion?: string | null;
   sourceMarketId?: string | null;
@@ -1055,7 +1108,8 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
     case "install_plugin_from_market": {
       const request = args?.request as { pluginId?: string } | undefined;
       if (request?.pluginId) testModeInstalledPluginIds.add(request.pluginId);
-      return testModeXPathRulePacks.find((pack) => pack.id === request?.pluginId) as T;
+      const pack = testModeXPathRulePacks.find((item) => item.id === request?.pluginId);
+      return (pack ? pluginPackFromXPathRulePack(pack) : undefined) as T;
     }
     case "install_plugin_from_url": {
       const pack = {
@@ -1067,13 +1121,15 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       };
       testModeInstalledPluginIds.add(pack.id);
       testModeXPathRulePacks = [pack, ...testModeXPathRulePacks.filter((item) => item.id !== pack.id)];
-      return pack as T;
+      return pluginPackFromXPathRulePack(pack) as T;
     }
     case "uninstall_plugin":
       testModeInstalledPluginIds.delete(String(args?.pluginId ?? ""));
       return undefined as T;
     case "list_installed_plugin_packs":
-      return testModeXPathRulePacks.filter((pack) => testModeInstalledPluginIds.has(pack.id)) as T;
+      return testModeXPathRulePacks
+        .filter((pack) => testModeInstalledPluginIds.has(pack.id))
+        .map(pluginPackFromXPathRulePack) as T;
     case "create_plugin_market_template":
       return {
         path: "/tmp/feader-plugin-market-template",
@@ -1087,7 +1143,7 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       return testModeXPathRulePacks as T;
     case "fetch_registry_packs":
       return testModeXPathRulePacks.map((pack) => ({
-        ...pack,
+        ...pluginPackFromXPathRulePack(pack),
         installed: testModeInstalledPluginIds.has(pack.id),
         sourceMarketId: "official-feaderhub",
         sourceMarketName: "FeaderHub Official",
@@ -1448,7 +1504,7 @@ function App() {
   const [hubInstallFilter, setHubInstallFilter] = useState<HubInstallFilter>("all");
   const [hubGroup, setHubGroup] = useState<"all" | "sources" | "appearance">("all");
   const [hubCategory, setHubCategory] = useState("all");
-  const [showPluginDialog, setShowPluginDialog] = useState<XPathRulePack | null>(null);
+  const [showPluginDialog, setShowPluginDialog] = useState<PluginPack | null>(null);
   const [dialogUrl, setDialogUrl] = useState("");
   const [dialogTitle, setDialogTitle] = useState("");
   const [dialogSectionId, setDialogSectionId] = useState("");
@@ -1741,7 +1797,13 @@ function App() {
     } catch (error) {
       const packs = await invoke<XPathRulePack[]>("list_xpath_plugin_packs");
       setXPathRulePacks(
-        withBuiltinViewPacks(packs.map((pack) => ({ ...pack, installed: true, sourceMarketId: null }))),
+        withBuiltinViewPacks(
+          packs.map((pack) => ({
+            ...pluginPackFromXPathRulePack(pack),
+            installed: true,
+            sourceMarketId: null,
+          })),
+        ),
       );
       setHubRegistryStatus(`Remote registry unavailable. Showing bundled packs. ${String(error)}`);
     }
@@ -1752,19 +1814,29 @@ function App() {
     setPluginMarkets(markets);
   }
 
-  function pluginUrlFromParams(pack: XPathRulePack, params: Record<string, string>): string {
-    let url = pack.parameters?.urlTemplate ?? "";
+  function pluginUrlFromParams(pack: PluginPack, params: Record<string, string>): string {
+    let url = pluginParameters(pack)?.urlTemplate ?? "";
     for (const [key, value] of Object.entries(params)) {
       url = url.split(`{${key}}`).join(encodeURIComponent(value));
     }
     return url;
   }
 
-  function openPluginDialog(pack: XPathRulePack): void {
-    const sections = pack.parameters?.sections;
+  function openPluginDialog(pack: PluginPack): void {
+    const xpath = pack.xpath;
+    if (!xpath) {
+      setActiveView(pack.runtime ? "settings" : activeView);
+      setStatus(
+        pack.runtime
+          ? `${pack.name} is a runtime source plugin. Configure its runtime in RSSHub settings before adding RSSHub routes.`
+          : `${pack.name} is not a source-rule plugin.`,
+      );
+      return;
+    }
+    const sections = xpath.parameters?.sections;
     const firstSection = sections?.[0];
-    const firstCandidate = pack.candidates[0];
-    const pluginParams = pack.parameters?.params;
+    const firstCandidate = xpath.candidates[0];
+    const pluginParams = xpath.parameters?.params;
 
     // Initialize param values from plugin param defaults
     const initialParams: Record<string, string> = {};
@@ -1787,7 +1859,7 @@ function App() {
     setDialogSectionId(firstSection?.id ?? "");
     setDialogTitle(pluginSourceTitle(pack, firstSection));
     setDialogCandidateId(firstCandidate?.id ?? "");
-    setDialogMaxItems(firstCandidate?.selectors.maxItems ?? pack.parameters?.defaults?.maxItems);
+    setDialogMaxItems(firstCandidate?.selectors.maxItems ?? xpath.parameters?.defaults?.maxItems);
     setDialogCookie(firstCandidate?.selectors.cookie ?? "");
     setDialogPreview(null);
     setDialogStatus(null);
@@ -1806,9 +1878,10 @@ function App() {
 
   function dialogSelectors(): XPathSelectors | null {
     if (!showPluginDialog) return null;
+    const xpath = showPluginDialog.xpath;
+    if (!xpath) return null;
     const candidate =
-      showPluginDialog.candidates.find((item) => item.id === dialogCandidateId) ??
-      showPluginDialog.candidates[0];
+      xpath.candidates.find((item) => item.id === dialogCandidateId) ?? xpath.candidates[0];
     if (!candidate) return null;
     return {
       ...candidate.selectors,
@@ -1879,7 +1952,7 @@ function App() {
       return;
     }
     await runTask("Installing plugin", async () => {
-      await invoke<XPathRulePack>("install_plugin_from_market", {
+      await invoke<PluginPack>("install_plugin_from_market", {
         request: { marketId: pack.sourceMarketId, pluginId: pack.id },
       });
       await loadXPathPluginPacks(false);
@@ -1898,7 +1971,7 @@ function App() {
       return;
     }
     await runTask("Updating plugin", async () => {
-      await invoke<XPathRulePack>("install_plugin_from_market", {
+      await invoke<PluginPack>("install_plugin_from_market", {
         request: { marketId: pack.sourceMarketId, pluginId: pack.id },
       });
       await loadXPathPluginPacks(false);
@@ -1945,6 +2018,9 @@ function App() {
     if (isViewPluginPack(pack)) {
       return isViewPluginInstalled(pack) ? "Uninstall" : "Install";
     }
+    if (isRuntimeSourcePluginPack(pack)) {
+      return pack.installed ? "Configure" : "Install";
+    }
     return pack.installed ? "Add Source" : "Install";
   }
 
@@ -1982,7 +2058,7 @@ function App() {
 
   async function handleInstallPluginUrl(): Promise<void> {
     await runTask("Installing plugin URL", async () => {
-      const pack = await invoke<XPathRulePack>("install_plugin_from_url", {
+      const pack = await invoke<PluginPack>("install_plugin_from_url", {
         request: { url: pluginInstallUrl },
       });
       setPluginInstallUrl("");
@@ -3326,9 +3402,9 @@ function App() {
             </header>
 
             <div className="dialog-body">
-              {showPluginDialog.parameters?.params && showPluginDialog.parameters.params.length > 0 ? (
+              {pluginParameters(showPluginDialog)?.params && pluginParameters(showPluginDialog)!.params!.length > 0 ? (
                 <>
-                  {showPluginDialog.parameters.params.map((param) => {
+                  {pluginParameters(showPluginDialog)!.params!.map((param) => {
                     const value = dialogParamValues[param.key] ?? "";
                     return (
                       <label className="dialog-field" key={param.key}>
@@ -3382,14 +3458,14 @@ function App() {
                 />
               </label>
 
-              {showPluginDialog.parameters?.sections && showPluginDialog.parameters.sections.length > 0 ? (
+              {pluginParameters(showPluginDialog)?.sections && pluginParameters(showPluginDialog)!.sections!.length > 0 ? (
                 <label className="dialog-field">
                   <span>Section</span>
                   <select
                     aria-label="Forum section"
                     disabled={isDialogBusy}
                     onChange={(e) => {
-                      const sec = showPluginDialog.parameters!.sections!.find(
+                      const sec = pluginParameters(showPluginDialog)!.sections!.find(
                         (s) => s.id === e.currentTarget.value,
                       );
                       if (sec) {
@@ -3400,7 +3476,7 @@ function App() {
                     }}
                     value={dialogSectionId}
                   >
-                    {showPluginDialog.parameters.sections.map((sec) => (
+                    {pluginParameters(showPluginDialog)!.sections!.map((sec) => (
                       <option key={sec.id} value={sec.id}>
                         {sec.path.join(" > ")}
                       </option>
@@ -3409,7 +3485,7 @@ function App() {
                 </label>
               ) : null}
 
-              {showPluginDialog.candidates.length > 1 ? (
+              {pluginCandidates(showPluginDialog).length > 1 ? (
                 <label className="dialog-field">
                   <span>Rule</span>
                   <select
@@ -3417,16 +3493,16 @@ function App() {
                     disabled={isDialogBusy}
                     onChange={(e) => {
                       const candidateId = e.currentTarget.value;
-                      const candidate = showPluginDialog.candidates.find((item) => item.id === candidateId);
+                      const candidate = pluginCandidates(showPluginDialog).find((item) => item.id === candidateId);
                       setDialogCandidateId(candidateId);
                       setDialogMaxItems(
-                        candidate?.selectors.maxItems ?? showPluginDialog.parameters?.defaults?.maxItems,
+                        candidate?.selectors.maxItems ?? pluginParameters(showPluginDialog)?.defaults?.maxItems,
                       );
                       setDialogPreview(null);
                     }}
                     value={dialogCandidateId}
                   >
-                    {showPluginDialog.candidates.map((candidate) => (
+                    {pluginCandidates(showPluginDialog).map((candidate) => (
                       <option key={candidate.id} value={candidate.id}>
                         {candidate.pageType}
                       </option>
@@ -3496,7 +3572,7 @@ function App() {
                   >
                     Save cookie
                   </button>
-                  {showPluginDialog?.auth ? (
+                  {pluginAuth(showPluginDialog) ? (
                     <button
                       type="button"
                       className="hub-cookie-check"
@@ -3506,8 +3582,8 @@ function App() {
                         try {
                           const result = await invoke<CredentialCheck>("check_plugin_credential", {
                             pluginId: showPluginDialog.id,
-                            checkUrl: showPluginDialog.auth!.checkUrl,
-                            loggedInXpath: showPluginDialog.auth!.loggedInXpath,
+                            checkUrl: pluginAuth(showPluginDialog)!.checkUrl,
+                            loggedInXpath: pluginAuth(showPluginDialog)!.loggedInXpath,
                           });
                           setCredentialCheck(result);
                         } catch (error) {
@@ -4510,7 +4586,7 @@ function XPathSelectorSummary({ selectors }: { selectors: XPathSelectors | null 
   );
 }
 
-function HubCardIcon({ pack, className }: { pack: XPathRulePack; className: string }) {
+function HubCardIcon({ pack, className }: { pack: PluginPack; className: string }) {
   if (pack.logo) {
     return (
       <div className={className}>
@@ -4549,7 +4625,7 @@ function SourcePluginSummary({ plugin }: { plugin?: XPathSourcePluginInfo }) {
   );
 }
 
-function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string {
+function pluginSourceTitle(pack: PluginPack, section?: PluginSection): string {
   const sectionName = section?.path[section.path.length - 1]?.trim();
   if (!sectionName) {
     return pack.name;
@@ -4560,7 +4636,7 @@ function pluginSourceTitle(pack: XPathRulePack, section?: PluginSection): string
   return `${pack.name} · ${sectionName}`;
 }
 
-function pluginSourceInfo(pack: XPathRulePack, candidate: XPathRuleCandidate): XPathSourcePluginInfo {
+function pluginSourceInfo(pack: PluginPack, candidate: XPathRuleCandidate): XPathSourcePluginInfo {
   return {
     id: pack.id,
     name: pack.name,
@@ -4574,7 +4650,7 @@ function pluginSourceInfo(pack: XPathRulePack, candidate: XPathRuleCandidate): X
   };
 }
 
-function PluginAuthorPanel({ pack }: { pack: XPathRulePack }) {
+function PluginAuthorPanel({ pack }: { pack: PluginPack }) {
   return <PluginAuthorDetails authors={pack.authors} />;
 }
 
@@ -5145,12 +5221,16 @@ function isViewPluginPack(pack: { kind: string }): boolean {
   );
 }
 
-const sourceFamilyOrder = ["Forum", "Video", "Article", "Other"];
+const sourceFamilyOrder = ["Runtime", "Forum", "Video", "Article", "Other"];
 const viewSlotOrder = ["App UI", "Source List", "Detail View"];
 
-function sourcePackFamilies(pack: { candidates: { pageType: string }[] }): Set<string> {
+function sourcePackFamilies(pack: PluginPack): Set<string> {
   const families = new Set<string>();
-  for (const candidate of pack.candidates) {
+  if (isRuntimeSourcePluginPack(pack)) {
+    families.add("Runtime");
+    return families;
+  }
+  for (const candidate of pluginCandidates(pack)) {
     const pageType = candidate.pageType.toLowerCase();
     if (pageType.includes("forum")) families.add("Forum");
     else if (pageType.includes("video")) families.add("Video");
@@ -5173,18 +5253,64 @@ function viewPluginCategory(pack: { kind: string }): string | null {
   return null;
 }
 
-function pluginKindLabel(pack: XPathRulePack): string {
+function pluginPackFromXPathRulePack(pack: XPathRulePack): PluginPack {
+  return {
+    id: pack.id,
+    name: pack.name,
+    version: pack.version,
+    apiVersion: pack.apiVersion,
+    kind: pack.kind,
+    registry: pack.registry,
+    trust: pack.trust,
+    description: pack.description,
+    logo: pack.logo,
+    capabilities: pack.capabilities,
+    authors: pack.authors,
+    xpath: pack,
+  };
+}
+
+function pluginCandidates(pack: PluginPack): XPathRuleCandidate[] {
+  return pack.xpath?.candidates ?? [];
+}
+
+function pluginParameters(pack: PluginPack | null): PluginParameters | null {
+  return pack?.xpath?.parameters ?? null;
+}
+
+function pluginAuth(pack: PluginPack | null): PluginAuth | null {
+  return pack?.xpath?.auth ?? null;
+}
+
+function pluginTokens(pack: PluginPack): Record<string, string> | null | undefined {
+  return pack.view?.tokens;
+}
+
+function isRuntimeSourcePluginPack(pack: { kind: string }): boolean {
+  return pack.kind === "runtime-source-plugin";
+}
+
+function pluginKindLabel(pack: PluginPack): string {
+  if (isRuntimeSourcePluginPack(pack)) {
+    return "Runtime Source";
+  }
   if (isViewPluginPack(pack)) {
     return viewPluginCategory(pack) ?? "View plugin";
   }
-  return `${pack.candidates.length} rule${pack.candidates.length !== 1 ? "s" : ""}`;
+  const count = pluginCandidates(pack).length;
+  return `${count} rule${count !== 1 ? "s" : ""}`;
 }
 
-function pluginMetaLabel(pack: XPathRulePack): string {
+function pluginMetaLabel(pack: PluginPack): string {
+  if (isRuntimeSourcePluginPack(pack)) {
+    return pack.runtime
+      ? `${pack.runtime.runtime.engine}${pack.runtime.runtime.package ? ` · ${pack.runtime.runtime.package}` : ""}`
+      : "Runtime source";
+  }
   if (isViewPluginPack(pack)) {
     return pack.capabilities.join(", ");
   }
-  return pack.candidates.map((candidate) => candidate.pageType).join(", ");
+  return pluginCandidates(pack).map((candidate) => candidate.pageType).join(", ");
 }
 
 function marketplacePackKey(pack: MarketplacePluginPack): string {
@@ -5266,7 +5392,7 @@ function viewPluginDefinitionsForKind(
       name: pack.name,
       description: pack.description,
       capability: pack.capabilities[0] ?? pluginKindLabel(pack),
-      tokens: pack.tokens,
+      tokens: pluginTokens(pack),
     });
   }
   return [...byId.values()];

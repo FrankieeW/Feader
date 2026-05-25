@@ -16,6 +16,7 @@ pub const PLUGIN_KIND_JSON_API_FEED: &str = "json-api-feed";
 pub const PLUGIN_KIND_APP_UI_THEME: &str = "app-ui-theme";
 pub const PLUGIN_KIND_SOURCE_LIST_VIEW: &str = "source-list-view";
 pub const PLUGIN_KIND_DETAIL_VIEW: &str = "detail-view";
+pub const PLUGIN_KIND_RUNTIME_SOURCE: &str = "runtime-source-plugin";
 
 /// A readable source that can produce articles.
 #[derive(Debug, Clone, Serialize)]
@@ -380,12 +381,39 @@ pub struct XPathRulePack {
     pub tokens: Option<HashMap<String, String>>,
 }
 
+/// Common marketplace/install envelope for all Feader plugin kinds.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPack {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub api_version: String,
+    pub kind: String,
+    pub registry: String,
+    pub trust: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<PluginAuthor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PluginPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xpath: Option<XPathRulePack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<RemoteViewPlugin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeSourcePlugin>,
+}
+
 /// A plugin pack as shown in the marketplace, including local install state.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketplacePluginPack {
     #[serde(flatten)]
-    pub pack: XPathRulePack,
+    pub pack: PluginPack,
     pub installed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_version: Option<String>,
@@ -456,6 +484,18 @@ pub struct PluginAuthor {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_id: Option<String>,
+}
+
+/// Permission metadata declared by a plugin manifest.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPermissions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<String>,
 }
 
 /// Login probe declared by a plugin for credential validity checks.
@@ -550,7 +590,7 @@ pub struct RegistryPluginEntry {
 }
 
 /// Remote plugin manifest (minimal subset needed to locate the rule pack).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemotePluginManifest {
     pub id: String,
@@ -564,10 +604,51 @@ pub struct RemotePluginManifest {
     pub entry: String,
     #[serde(default)]
     pub authors: Vec<PluginAuthor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PluginPermissions>,
+}
+
+/// Remote runtime-source payload for plugins that generate feeds via a local helper runtime.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSourcePlugin {
+    pub schema_version: String,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub runtime: RuntimeSourceRuntime,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_templates: Vec<RuntimeRouteTemplate>,
+}
+
+/// Runtime requirements for an advanced source plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSourceRuntime {
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+}
+
+/// A route family exposed by a runtime source plugin.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRouteTemplate {
+    pub id: String,
+    pub label: String,
+    pub route_template: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_credentials: Vec<String>,
 }
 
 /// Remote xpath-rule-pack payload.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteXPathRulePack {
     pub schema_version: String,
@@ -583,7 +664,7 @@ pub struct RemoteXPathRulePack {
 }
 
 /// Remote view-plugin template payload.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteViewPlugin {
     pub schema_version: String,

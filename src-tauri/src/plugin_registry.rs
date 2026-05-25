@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use crate::models::{
-    PluginMarket, RegistryIndex, RegistryPluginEntry, RemotePluginManifest, RemoteViewPlugin,
-    RemoteXPathRulePack, XPathRuleCandidate, XPathRulePack, XPathSelectors,
-    PLUGIN_KIND_APP_UI_THEME, PLUGIN_KIND_DETAIL_VIEW, PLUGIN_KIND_JSON_API_FEED,
-    PLUGIN_KIND_SOURCE_LIST_VIEW, PLUGIN_KIND_XPATH,
-};
 use crate::error::Result;
+use crate::models::{
+    PluginMarket, PluginPack, RegistryIndex, RegistryPluginEntry, RemotePluginManifest,
+    RemoteViewPlugin, RemoteXPathRulePack, RuntimeSourcePlugin, XPathRuleCandidate, XPathRulePack,
+    XPathSelectors, PLUGIN_KIND_APP_UI_THEME, PLUGIN_KIND_DETAIL_VIEW, PLUGIN_KIND_JSON_API_FEED,
+    PLUGIN_KIND_RUNTIME_SOURCE, PLUGIN_KIND_SOURCE_LIST_VIEW, PLUGIN_KIND_XPATH,
+};
 
 const STATIC_XPATH_API_VERSION: &str = "xpath-rule-pack/v1";
 const OFFICIAL_REGISTRY: &str = "https://github.com/FrankieeW/FeaderHub";
@@ -24,8 +24,10 @@ const JSON_API_FEED_KIND: &str = PLUGIN_KIND_JSON_API_FEED;
 const APP_UI_THEME_KIND: &str = PLUGIN_KIND_APP_UI_THEME;
 const SOURCE_LIST_VIEW_KIND: &str = PLUGIN_KIND_SOURCE_LIST_VIEW;
 const DETAIL_VIEW_KIND: &str = PLUGIN_KIND_DETAIL_VIEW;
+const RUNTIME_SOURCE_KIND: &str = PLUGIN_KIND_RUNTIME_SOURCE;
 const JSON_API_FEED_API_VERSION: &str = "json-api-feed/v1";
 const VIEW_PLUGIN_API_VERSION: &str = "feader-view-plugin/v1";
+const RUNTIME_SOURCE_API_VERSION: &str = "runtime-source-plugin/v1";
 const REGISTRY_FETCH_TIMEOUT_SECONDS: u64 = 15;
 const REGISTRY_INDEX_BYTE_CAP: usize = 128 * 1024;
 const PLUGIN_FILE_BYTE_CAP: usize = 256 * 1024;
@@ -91,9 +93,7 @@ fn candidate_matches(document: &str, candidate: &XPathRuleCandidate) -> bool {
         .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
 }
 
-pub async fn fetch_registry_index_from_market(
-    market: &PluginMarket,
-) -> Result<RegistryIndex> {
+pub async fn fetch_registry_index_from_market(market: &PluginMarket) -> Result<RegistryIndex> {
     fetch_registry_index_from_base(&market.raw_base_url).await
 }
 
@@ -103,10 +103,7 @@ async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIn
 
     let index = serde_json::from_str::<RegistryIndex>(&body)?;
     if index.schema_version != "feader-registry/v1" {
-        return Err(format!(
-            "Unsupported registry schema '{}'",
-            index.schema_version
-        ).into());
+        return Err(format!("Unsupported registry schema '{}'", index.schema_version).into());
     }
     Ok(index)
 }
@@ -114,7 +111,7 @@ async fn fetch_registry_index_from_base(raw_base_url: &str) -> Result<RegistryIn
 pub async fn fetch_remote_plugin_pack_from_market(
     market: &PluginMarket,
     entry: &RegistryPluginEntry,
-) -> Result<XPathRulePack> {
+) -> Result<PluginPack> {
     fetch_remote_plugin_pack_from_base(
         entry,
         &market.raw_base_url,
@@ -137,12 +134,9 @@ async fn fetch_remote_plugin_pack_from_base(
     raw_base_url: &str,
     registry: &str,
     trust: &str,
-) -> Result<XPathRulePack> {
+) -> Result<PluginPack> {
     if !is_supported_registry_kind(&entry.kind) {
-        return Err(format!(
-            "Plugin {} has unsupported kind '{}'",
-            entry.id, entry.kind
-        ).into());
+        return Err(format!("Plugin {} has unsupported kind '{}'", entry.id, entry.kind).into());
     }
     let expected_sha = entry
         .sha256
@@ -177,55 +171,29 @@ async fn fetch_remote_plugin_pack_from_base(
             .map_err(|error| format!("Failed to parse view plugin {}: {error}", manifest.entry))?;
         validate_view_plugin(entry, &manifest, &pack)?;
 
-        return Ok(XPathRulePack {
-            id: pack.id,
-            name: pack.name,
-            version: pack.version,
-            api_version: manifest.feader_api_version,
-            kind: manifest.kind.clone(),
-            registry: registry.to_string(),
-            trust: trust.to_string(),
-            description: pack
-                .description
-                .or(manifest.description)
-                .unwrap_or_default(),
-            logo: manifest.logo,
-            capabilities: pack.capabilities,
-            candidates: Vec::new(),
-            authors: manifest.authors,
-            parameters: None,
-            auth: None,
-            tokens: Some(pack.tokens),
-        });
+        return Ok(plugin_pack_from_view(pack, &manifest, registry, trust));
+    }
+
+    if manifest.kind == RUNTIME_SOURCE_KIND {
+        let pack: RuntimeSourcePlugin = serde_json::from_str(&pack_body).map_err(|error| {
+            format!(
+                "Failed to parse runtime source plugin {}: {error}",
+                manifest.entry
+            )
+        })?;
+        validate_runtime_source_plugin(entry, &manifest, &pack)?;
+
+        return Ok(plugin_pack_from_runtime(pack, &manifest, registry, trust));
     }
 
     let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body)
         .map_err(|error| format!("Failed to parse rule pack {}: {error}", manifest.entry))?;
     validate_rule_pack(entry, &manifest, &pack)?;
 
-    Ok(XPathRulePack {
-        id: pack.id,
-        name: pack.name,
-        version: pack.version,
-        api_version: manifest.feader_api_version,
-        kind: manifest.kind.clone(),
-        registry: registry.to_string(),
-        trust: trust.to_string(),
-        description: pack
-            .description
-            .or(manifest.description)
-            .unwrap_or_default(),
-        logo: manifest.logo,
-        capabilities: plugin_capabilities(&pack.candidates),
-        candidates: pack.candidates,
-        authors: manifest.authors,
-        parameters: pack.parameters,
-        auth: pack.auth,
-        tokens: None,
-    })
+    Ok(plugin_pack_from_xpath(pack, &manifest, registry, trust))
 }
 
-pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
+pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<PluginPack> {
     let normalized_url = normalize_plugin_file_url(url)?;
     let url = normalized_url.as_str();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -234,7 +202,7 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
     let body = fetch_text_limited(url, PLUGIN_FILE_BYTE_CAP, "plugin URL").await?;
     if let Ok(pack) = serde_json::from_str::<RemoteXPathRulePack>(&body) {
         validate_standalone_rule_pack(&pack)?;
-        return Ok(XPathRulePack {
+        let xpath = XPathRulePack {
             id: pack.id,
             name: pack.name,
             version: pack.version,
@@ -250,11 +218,14 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
             parameters: pack.parameters,
             auth: pack.auth,
             tokens: None,
-        });
+        };
+        return Ok(plugin_pack_from_xpath_rule_pack(xpath));
     }
 
     let manifest: RemotePluginManifest = serde_json::from_str(&body)
         .map_err(|error| format!("Plugin URL was not a manifest or rule pack JSON: {error}"))?;
+    let direct_entry = direct_registry_entry(&manifest);
+    validate_manifest(&direct_entry, &manifest)?;
     let manifest_url = url::Url::parse(url).map_err(|error| error.to_string())?;
     let entry_url = manifest_url
         .join(&manifest.entry)
@@ -262,9 +233,30 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
     let pack_body = fetch_text_limited(
         entry_url.as_str(),
         PLUGIN_FILE_BYTE_CAP,
-        "direct plugin rule pack",
+        "direct plugin entry",
     )
     .await?;
+    if is_view_plugin_kind(&manifest.kind) {
+        let pack: RemoteViewPlugin = serde_json::from_str(&pack_body).map_err(|error| {
+            format!(
+                "Failed to parse direct view plugin {}: {error}",
+                manifest.entry
+            )
+        })?;
+        validate_view_plugin(&direct_entry, &manifest, &pack)?;
+        return Ok(plugin_pack_from_view(pack, &manifest, url, "direct-url"));
+    }
+    if manifest.kind == RUNTIME_SOURCE_KIND {
+        let pack: RuntimeSourcePlugin = serde_json::from_str(&pack_body).map_err(|error| {
+            format!(
+                "Failed to parse direct runtime source plugin {}: {error}",
+                manifest.entry
+            )
+        })?;
+        validate_runtime_source_plugin(&direct_entry, &manifest, &pack)?;
+        return Ok(plugin_pack_from_runtime(pack, &manifest, url, "direct-url"));
+    }
+
     let pack: RemoteXPathRulePack = serde_json::from_str(&pack_body).map_err(|error| {
         format!(
             "Failed to parse direct rule pack {}: {error}",
@@ -272,26 +264,7 @@ pub async fn fetch_plugin_pack_from_url(url: &str) -> Result<XPathRulePack> {
         )
     })?;
     validate_direct_manifest_and_pack(&manifest, &pack)?;
-    Ok(XPathRulePack {
-        id: pack.id,
-        name: pack.name,
-        version: pack.version,
-        api_version: manifest.feader_api_version,
-        kind: manifest.kind,
-        registry: url.to_string(),
-        trust: "direct-url".to_string(),
-        description: pack
-            .description
-            .or(manifest.description)
-            .unwrap_or_default(),
-        logo: manifest.logo,
-        capabilities: plugin_capabilities(&pack.candidates),
-        candidates: pack.candidates,
-        authors: manifest.authors,
-        parameters: pack.parameters,
-        auth: pack.auth,
-        tokens: None,
-    })
+    Ok(plugin_pack_from_xpath(pack, &manifest, url, "direct-url"))
 }
 
 fn normalize_plugin_file_url(url: &str) -> Result<String> {
@@ -339,7 +312,8 @@ async fn fetch_text_limited(url: &str, cap: usize, label: &str) -> Result<String
     if bytes.len() > cap {
         return Err(format!("{label} exceeded {} bytes", cap).into());
     }
-    Ok(String::from_utf8(bytes.to_vec()).map_err(|error| format!("{label} was not UTF-8: {error}"))?)
+    Ok(String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("{label} was not UTF-8: {error}"))?)
 }
 
 fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str> {
@@ -354,33 +328,30 @@ fn validate_registry_path<'a>(path: &'a str, label: &str) -> Result<&'a str> {
     Ok(trimmed)
 }
 
-fn validate_manifest(
-    entry: &RegistryPluginEntry,
-    manifest: &RemotePluginManifest,
-) -> Result<()> {
+fn validate_manifest(entry: &RegistryPluginEntry, manifest: &RemotePluginManifest) -> Result<()> {
     if manifest.id != entry.id {
         return Err(format!(
             "Manifest id '{}' does not match registry id '{}'",
             manifest.id, entry.id
-        ).into());
+        )
+        .into());
     }
     if manifest.version != entry.version {
         return Err(format!(
             "Manifest version '{}' does not match registry version '{}'",
             manifest.version, entry.version
-        ).into());
+        )
+        .into());
     }
     if manifest.name != entry.name {
         return Err(format!(
             "Manifest name '{}' does not match registry name '{}'",
             manifest.name, entry.name
-        ).into());
+        )
+        .into());
     }
     if !is_supported_registry_kind(&manifest.kind) {
-        return Err(format!(
-            "Manifest kind '{}' is not supported",
-            manifest.kind
-        ).into());
+        return Err(format!("Manifest kind '{}' is not supported", manifest.kind).into());
     }
     let expected_api_version = expected_api_version_for_kind(&manifest.kind)
         .ok_or_else(|| format!("Manifest kind '{}' is not supported", manifest.kind))?;
@@ -388,7 +359,8 @@ fn validate_manifest(
         return Err(format!(
             "Manifest API version '{}' is not supported",
             manifest.feader_api_version
-        ).into());
+        )
+        .into());
     }
     Ok(())
 }
@@ -402,7 +374,8 @@ fn validate_view_plugin(
         return Err(format!(
             "View plugin schema '{}' is not supported",
             pack.schema_version
-        ).into());
+        )
+        .into());
     }
     if pack.id != entry.id || pack.id != manifest.id {
         return Err("View plugin id does not match manifest or registry".into());
@@ -418,23 +391,24 @@ fn validate_view_plugin(
         SOURCE_LIST_VIEW_KIND => "source-list",
         DETAIL_VIEW_KIND => "detail-view",
         _ => {
-            return Err(format!(
-                "View plugin kind '{}' is not supported",
-                manifest.kind
-            ).into());
+            return Err(format!("View plugin kind '{}' is not supported", manifest.kind).into());
         }
     };
     if pack.slot != expected_slot {
         return Err(format!(
             "View plugin slot '{}' does not match kind '{}'",
             pack.slot, manifest.kind
-        ).into());
+        )
+        .into());
     }
     Ok(())
 }
 
 fn is_supported_registry_kind(kind: &str) -> bool {
-    kind == STATIC_XPATH_KIND || kind == JSON_API_FEED_KIND || is_view_plugin_kind(kind)
+    kind == STATIC_XPATH_KIND
+        || kind == JSON_API_FEED_KIND
+        || kind == RUNTIME_SOURCE_KIND
+        || is_view_plugin_kind(kind)
 }
 
 fn is_view_plugin_kind(kind: &str) -> bool {
@@ -448,6 +422,7 @@ fn expected_api_version_for_kind(kind: &str) -> Option<&'static str> {
         APP_UI_THEME_KIND | SOURCE_LIST_VIEW_KIND | DETAIL_VIEW_KIND => {
             Some(VIEW_PLUGIN_API_VERSION)
         }
+        RUNTIME_SOURCE_KIND => Some(RUNTIME_SOURCE_API_VERSION),
         _ => None,
     }
 }
@@ -461,19 +436,18 @@ fn validate_rule_pack(
         return Err(format!(
             "Rule pack schema '{}' is not supported",
             pack.schema_version
-        ).into());
+        )
+        .into());
     }
     if pack.id != manifest.id || pack.id != entry.id {
-        return Err(format!(
-            "Rule pack id '{}' does not match manifest",
-            pack.id
-        ).into());
+        return Err(format!("Rule pack id '{}' does not match manifest", pack.id).into());
     }
     if pack.version != manifest.version {
         return Err(format!(
             "Rule pack version '{}' does not match manifest version '{}'",
             pack.version, manifest.version
-        ).into());
+        )
+        .into());
     }
     Ok(())
 }
@@ -483,7 +457,8 @@ fn validate_standalone_rule_pack(pack: &RemoteXPathRulePack) -> Result<()> {
         return Err(format!(
             "Rule pack schema '{}' is not supported",
             pack.schema_version
-        ).into());
+        )
+        .into());
     }
     if pack.id.trim().is_empty() || pack.name.trim().is_empty() || pack.version.trim().is_empty() {
         return Err("Rule pack id, name, and version are required".into());
@@ -498,16 +473,157 @@ fn validate_direct_manifest_and_pack(
     manifest: &RemotePluginManifest,
     pack: &RemoteXPathRulePack,
 ) -> Result<()> {
-    let entry = RegistryPluginEntry {
+    let entry = direct_registry_entry(manifest);
+    validate_manifest(&entry, manifest)?;
+    validate_rule_pack(&entry, manifest, pack)
+}
+
+fn validate_runtime_source_plugin(
+    entry: &RegistryPluginEntry,
+    manifest: &RemotePluginManifest,
+    pack: &RuntimeSourcePlugin,
+) -> Result<()> {
+    if pack.schema_version != RUNTIME_SOURCE_API_VERSION {
+        return Err(format!(
+            "Runtime source plugin schema '{}' is not supported",
+            pack.schema_version
+        )
+        .into());
+    }
+    if pack.id != entry.id || pack.id != manifest.id {
+        return Err("Runtime source plugin id does not match manifest or registry".into());
+    }
+    if pack.name != entry.name || pack.name != manifest.name {
+        return Err("Runtime source plugin name does not match manifest or registry".into());
+    }
+    if pack.version != entry.version || pack.version != manifest.version {
+        return Err("Runtime source plugin version does not match manifest or registry".into());
+    }
+    if pack.runtime.engine.trim().is_empty() {
+        return Err("Runtime source plugin engine is required".into());
+    }
+    Ok(())
+}
+
+fn direct_registry_entry(manifest: &RemotePluginManifest) -> RegistryPluginEntry {
+    RegistryPluginEntry {
         id: manifest.id.clone(),
         name: manifest.name.clone(),
         version: manifest.version.clone(),
         kind: manifest.kind.clone(),
         manifest: "direct-url".to_string(),
         sha256: None,
+    }
+}
+
+fn plugin_pack_from_xpath(
+    pack: RemoteXPathRulePack,
+    manifest: &RemotePluginManifest,
+    registry: &str,
+    trust: &str,
+) -> PluginPack {
+    let xpath = XPathRulePack {
+        id: pack.id,
+        name: pack.name,
+        version: pack.version,
+        api_version: manifest.feader_api_version.clone(),
+        kind: manifest.kind.clone(),
+        registry: registry.to_string(),
+        trust: trust.to_string(),
+        description: pack
+            .description
+            .or_else(|| manifest.description.clone())
+            .unwrap_or_default(),
+        logo: manifest.logo.clone(),
+        capabilities: plugin_capabilities(&pack.candidates),
+        candidates: pack.candidates,
+        authors: manifest.authors.clone(),
+        parameters: pack.parameters,
+        auth: pack.auth,
+        tokens: None,
     };
-    validate_manifest(&entry, manifest)?;
-    validate_rule_pack(&entry, manifest, pack)
+    plugin_pack_from_xpath_pack_with_permissions(xpath, manifest.permissions.clone())
+}
+
+pub fn plugin_pack_from_xpath_rule_pack(pack: XPathRulePack) -> PluginPack {
+    plugin_pack_from_xpath_pack_with_permissions(pack, None)
+}
+
+fn plugin_pack_from_xpath_pack_with_permissions(
+    pack: XPathRulePack,
+    permissions: Option<crate::models::PluginPermissions>,
+) -> PluginPack {
+    PluginPack {
+        id: pack.id.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        api_version: pack.api_version.clone(),
+        kind: pack.kind.clone(),
+        registry: pack.registry.clone(),
+        trust: pack.trust.clone(),
+        description: pack.description.clone(),
+        logo: pack.logo.clone(),
+        capabilities: pack.capabilities.clone(),
+        authors: pack.authors.clone(),
+        permissions,
+        xpath: Some(pack),
+        view: None,
+        runtime: None,
+    }
+}
+
+fn plugin_pack_from_view(
+    pack: RemoteViewPlugin,
+    manifest: &RemotePluginManifest,
+    registry: &str,
+    trust: &str,
+) -> PluginPack {
+    PluginPack {
+        id: pack.id.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        api_version: manifest.feader_api_version.clone(),
+        kind: manifest.kind.clone(),
+        registry: registry.to_string(),
+        trust: trust.to_string(),
+        description: pack
+            .description
+            .clone()
+            .or_else(|| manifest.description.clone())
+            .unwrap_or_default(),
+        logo: manifest.logo.clone(),
+        capabilities: pack.capabilities.clone(),
+        authors: manifest.authors.clone(),
+        permissions: manifest.permissions.clone(),
+        xpath: None,
+        view: Some(pack),
+        runtime: None,
+    }
+}
+
+fn plugin_pack_from_runtime(
+    pack: RuntimeSourcePlugin,
+    manifest: &RemotePluginManifest,
+    registry: &str,
+    trust: &str,
+) -> PluginPack {
+    PluginPack {
+        id: pack.id.clone(),
+        name: pack.name.clone(),
+        version: pack.version.clone(),
+        api_version: manifest.feader_api_version.clone(),
+        kind: manifest.kind.clone(),
+        registry: registry.to_string(),
+        trust: trust.to_string(),
+        description: manifest.description.clone().unwrap_or_default(),
+        logo: manifest.logo.clone(),
+        capabilities: pack.capabilities.clone(),
+        authors: manifest.authors.clone(),
+        permissions: manifest.permissions.clone(),
+        xpath: None,
+        view: None,
+        runtime: Some(pack),
+    }
 }
 
 fn plugin_capabilities(candidates: &[XPathRuleCandidate]) -> Vec<String> {
@@ -524,7 +640,8 @@ fn verify_sha256(body: &str, expected: &str, plugin_id: &str) -> Result<()> {
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(format!(
             "Plugin {plugin_id} checksum mismatch: expected {expected}, got {actual}"
-        ).into());
+        )
+        .into());
     }
     Ok(())
 }
@@ -767,6 +884,7 @@ mod tests {
             logo: None,
             entry: "view-plugin.json".to_string(),
             authors: Vec::new(),
+            permissions: None,
         };
         let pack = RemoteViewPlugin {
             schema_version: VIEW_PLUGIN_API_VERSION.to_string(),
@@ -784,5 +902,47 @@ mod tests {
         assert!(is_supported_registry_kind(APP_UI_THEME_KIND));
         assert!(is_supported_registry_kind(SOURCE_LIST_VIEW_KIND));
         assert!(is_supported_registry_kind(DETAIL_VIEW_KIND));
+    }
+
+    #[test]
+    fn validates_runtime_source_plugin_kind() {
+        let entry = RegistryPluginEntry {
+            id: "official.rsshub-runtime.source".to_string(),
+            name: "RSSHub Runtime".to_string(),
+            version: "0.1.0".to_string(),
+            kind: RUNTIME_SOURCE_KIND.to_string(),
+            manifest: "plugins/official.rsshub-runtime.source/manifest.json".to_string(),
+            sha256: Some("0".repeat(64)),
+        };
+        let manifest = RemotePluginManifest {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            kind: RUNTIME_SOURCE_KIND.to_string(),
+            feader_api_version: RUNTIME_SOURCE_API_VERSION.to_string(),
+            description: Some("Local RSSHub runtime".to_string()),
+            logo: None,
+            entry: "runtime-source-plugin.json".to_string(),
+            authors: Vec::new(),
+            permissions: None,
+        };
+        let pack = RuntimeSourcePlugin {
+            schema_version: RUNTIME_SOURCE_API_VERSION.to_string(),
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            runtime: crate::models::RuntimeSourceRuntime {
+                engine: "node".to_string(),
+                package: Some("rsshub".to_string()),
+                version: Some("latest".to_string()),
+                entry: Some("rsshub".to_string()),
+            },
+            capabilities: vec!["runtime.localFeedGenerator".to_string()],
+            route_templates: Vec::new(),
+        };
+
+        assert!(validate_manifest(&entry, &manifest).is_ok());
+        assert!(validate_runtime_source_plugin(&entry, &manifest, &pack).is_ok());
+        assert!(is_supported_registry_kind(RUNTIME_SOURCE_KIND));
     }
 }
