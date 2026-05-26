@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Canonical source kinds persisted in the database.
 pub const SOURCE_KIND_RSS: &str = "rss";
@@ -244,20 +244,33 @@ pub fn is_env_reference(value: &str) -> bool {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XPathSelectors {
+    #[serde(deserialize_with = "deserialize_selector_string")]
     pub items: String,
+    #[serde(deserialize_with = "deserialize_selector_string")]
     pub title: String,
+    #[serde(deserialize_with = "deserialize_selector_string")]
     pub url: String,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub published_at: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookie: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_selector_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub detail_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content_cleanup: Vec<ContentCleanupRule>,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub image: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_selector_string")]
     pub next_page: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_fields: Vec<XPathCustomField>,
@@ -267,6 +280,39 @@ pub struct XPathSelectors {
     pub plugin: Option<XPathSourcePluginInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader: Option<ReaderConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum SelectorStringValue {
+    String(String),
+    Object { xpath: String },
+}
+
+impl SelectorStringValue {
+    fn into_xpath(self) -> String {
+        match self {
+            SelectorStringValue::String(value) => value,
+            SelectorStringValue::Object { xpath } => xpath,
+        }
+    }
+}
+
+fn deserialize_selector_string<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(SelectorStringValue::deserialize(deserializer)?.into_xpath())
+}
+
+fn deserialize_optional_selector_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<SelectorStringValue>::deserialize(deserializer)?
+        .map(SelectorStringValue::into_xpath))
 }
 
 /// A regex replacement applied to extracted article body HTML.

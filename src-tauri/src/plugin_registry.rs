@@ -865,6 +865,58 @@ mod tests {
     }
 
     #[test]
+    fn parses_selector_object_shorthand_in_rule_packs() {
+        let pack: RemoteXPathRulePack = serde_json::from_str(
+            r#"{
+              "schemaVersion": "xpath-rule-pack/v1",
+              "id": "yeats33.2048.xpath",
+              "name": "2048",
+              "version": "0.1.0",
+              "candidates": [
+                {
+                  "id": "thread-list",
+                  "pageType": "list",
+                  "priority": 90,
+                  "detect": ["ajaxtable"],
+                  "selectors": {
+                    "items": "//table[@id='ajaxtable']//tr",
+                    "title": "a.subject",
+                    "url": "a.subject/@href",
+                    "author": {
+                      "xpath": ".//td[contains(@class,'fl black')]",
+                      "scope": "item"
+                    },
+                    "publishedAt": {
+                      "xpath": "span.fl.gray/@title",
+                      "scope": "item"
+                    },
+                    "image": {
+                      "xpath": "//*[@id='read_tpc']//img/@src",
+                      "scope": "detail"
+                    }
+                  }
+                }
+              ]
+            }"#,
+        )
+        .expect("selector object shorthand parses");
+
+        let selectors = &pack.candidates[0].selectors;
+        assert_eq!(
+            selectors.author.as_deref(),
+            Some(".//td[contains(@class,'fl black')]")
+        );
+        assert_eq!(
+            selectors.published_at.as_deref(),
+            Some("span.fl.gray/@title")
+        );
+        assert_eq!(
+            selectors.image.as_deref(),
+            Some("//*[@id='read_tpc']//img/@src")
+        );
+    }
+
+    #[test]
     fn validates_official_view_plugin_kinds() {
         let entry = RegistryPluginEntry {
             id: "official.cyberpunk-ui.view".to_string(),
