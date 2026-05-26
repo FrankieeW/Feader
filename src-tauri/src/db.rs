@@ -9,9 +9,9 @@ use url::Url;
 
 use crate::models::{
     AiSettings, AiSettingsInput, Article, ArticleFilter, ParsedArticle, PluginCredential,
-    PluginPack, PluginRefreshOverride, RssHubSourceConfig, Source, WalletLoginChallenge,
-    WalletSession, XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS, SOURCE_KIND_RSSHUB,
-    SOURCE_KIND_XPATH,
+    PluginPack, PluginRefreshOverride, RssHubSourceConfig, SettingsCardLayout, Source,
+    WalletLoginChallenge, WalletSession, XPathSelectors, SOURCE_KIND_JSON_API, SOURCE_KIND_RSS,
+    SOURCE_KIND_RSSHUB, SOURCE_KIND_XPATH,
 };
 
 const WALLET_LOGIN_STATEMENT: &str = "Sign in to Feader with your Ethereum wallet.";
@@ -944,6 +944,29 @@ impl AppDatabase {
         Ok(())
     }
 
+    /// Delete an app_settings key.
+    pub fn delete_setting(&self, key: &str) -> Result<(), String> {
+        let connection = self.connection.lock().map_err(|error| error.to_string())?;
+        connection
+            .execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// Read and parse the settings card layout.
+    pub fn get_settings_layout(&self) -> Result<SettingsCardLayout, String> {
+        let json = self
+            .get_setting("settings_layout:v1")?
+            .ok_or_else(|| "settings_layout:v1 not found".to_string())?;
+        serde_json::from_str(&json).map_err(|error| error.to_string())
+    }
+
+    /// Serialize and persist the settings card layout.
+    pub fn set_settings_layout(&self, layout: &SettingsCardLayout) -> Result<(), String> {
+        let json = serde_json::to_string(layout).map_err(|error| error.to_string())?;
+        self.set_setting("settings_layout:v1", &json)
+    }
+
     /// Read plugin-level refresh interval override.
     pub fn get_plugin_refresh_interval(&self, plugin_id: &str) -> Result<Option<i64>, String> {
         let connection = self.connection.lock().map_err(|error| error.to_string())?;
@@ -1679,6 +1702,39 @@ mod tests {
             })
             .expect("saves");
         assert_eq!(referenced.api_key_reference.as_deref(), Some("$MY_KEY"));
+    }
+
+    #[test]
+    fn settings_layout_round_trip_and_delete() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let layout = SettingsCardLayout {
+            version: 1,
+            cards: vec![
+                crate::models::SettingsCardEntry {
+                    id: "appearance".to_string(),
+                    width: "one-column".to_string(),
+                    order: 0,
+                    visible: true,
+                },
+                crate::models::SettingsCardEntry {
+                    id: "rsshub".to_string(),
+                    width: "two-column".to_string(),
+                    order: 1,
+                    visible: true,
+                },
+            ],
+        };
+
+        database.set_settings_layout(&layout).expect("layout saves");
+        let saved = database.get_settings_layout().expect("layout reads");
+        assert_eq!(saved.version, 1);
+        assert_eq!(saved.cards.len(), 2);
+        assert_eq!(saved.cards[1].id, "rsshub");
+
+        database
+            .delete_setting("settings_layout:v1")
+            .expect("layout deletes");
+        assert!(database.get_settings_layout().is_err());
     }
 
     #[test]

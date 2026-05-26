@@ -113,7 +113,10 @@ pub fn run() {
             refresh::set_global_refresh_interval,
             refresh::set_plugin_refresh_interval,
             refresh::set_source_refresh_interval,
-            refresh::set_auto_refresh_enabled
+            refresh::set_auto_refresh_enabled,
+            commands::settings_layout::get_settings_layout,
+            commands::settings_layout::set_settings_layout,
+            commands::settings_layout::delete_settings_layout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

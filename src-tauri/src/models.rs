@@ -660,6 +660,14 @@ pub struct PluginSettingsCard {
     pub renderer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<String>,
+    #[serde(default = "default_settings_card_width")]
+    pub default_width: String,
+    #[serde(default)]
+    pub allowed_widths: Vec<String>,
+}
+
+fn default_settings_card_width() -> String {
+    "two-column".to_string()
 }
 
 /// Host-rendered settings page declared by an advanced plugin.
@@ -889,4 +897,22 @@ pub struct RefreshTickEvent {
     pub next_refresh_at: Option<String>,
     pub sources_checked: usize,
     pub sources_refreshed: usize,
+}
+
+/// A persisted settings card layout entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsCardEntry {
+    pub id: String,
+    pub width: String,
+    pub order: i32,
+    pub visible: bool,
+}
+
+/// The full settings layout configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsCardLayout {
+    pub version: i32,
+    pub cards: Vec<SettingsCardEntry>,
 }

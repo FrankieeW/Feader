@@ -1265,6 +1265,132 @@ select:disabled {
   gap: 12px;
 }
 
+.settings-card-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-card-shell-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 4px;
+  color: var(--color-muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.settings-card-shell-toolbar:active {
+  cursor: grabbing;
+}
+
+.settings-drag-handle,
+.settings-card-width-lock,
+.settings-card-width-btn {
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-drag-handle {
+  padding: 4px 8px;
+  border: 1px dashed var(--color-border);
+}
+
+.settings-card-width-lock,
+.settings-card-width-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  color: var(--color-muted);
+}
+
+.settings-card-width-btn {
+  cursor: pointer;
+}
+
+.settings-card-width-btn:hover {
+  border-color: var(--color-brand);
+  color: var(--color-text);
+}
+
+.settings-card-shell-body {
+  min-height: 0;
+}
+
+.settings-card-shell[data-width="one-column"] {
+  grid-column: span 1;
+  height: 320px;
+}
+
+.settings-card-shell[data-width="one-column"] .settings-card-shell-body {
+  overflow: auto;
+}
+
+.settings-card-shell[data-width="one-column"] .settings-card {
+  min-height: 100%;
+}
+
+.settings-card-shell[data-width="two-column"] {
+  grid-column: span 2;
+  height: auto;
+}
+
+.settings-card-shell[data-width="two-column"] .settings-card-shell-body {
+  overflow: visible;
+}
+
+@media (max-width: 760px) {
+  .settings-card-shell[data-width] {
+    grid-column: span 1;
+    height: auto;
+  }
+
+  .settings-card-shell[data-width] .settings-card-shell-body {
+    overflow: visible;
+  }
+}
+
+.settings-card-shell.is-dragging {
+  opacity: 0.4;
+}
+
+.settings-card-shell.is-drop-target {
+  outline: 2px dashed var(--color-brand);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
+}
+
+.settings-card-body {
+  display: grid;
+  gap: 12px;
+}
+
+.interval-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.settings-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0.25rem 0;
+}
+
+.settings-inline-row dt {
+  flex: 1;
+}
+
 .source-card,
 .hub-card,
 .settings-card {

@@ -6,5 +6,6 @@ pub mod credentials;
 pub mod marketplace;
 pub mod plugin_config;
 pub mod rsshub;
+pub mod settings_layout;
 pub mod sources;
 pub mod wallet;

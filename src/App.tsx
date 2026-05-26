@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, FormEvent, KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, DragEvent, FormEvent, KeyboardEvent, PointerEvent, ReactNode } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { useAccount, useConnect, useDisconnect, useSignMessage } from "wagmi";
 import DOMPurify from "dompurify";
@@ -98,6 +98,31 @@ type ReaderVideo =
 type PaneWidths = {
   sidebar: number;
   timeline: number;
+};
+
+type SettingsCardWidth = "one-column" | "two-column";
+
+type SettingsCardEntry = {
+  id: string;
+  width: SettingsCardWidth;
+  order: number;
+  visible: boolean;
+};
+
+type SettingsCardLayout = {
+  version: number;
+  cards: SettingsCardEntry[];
+};
+
+type SettingsCardDefinition = {
+  id: string;
+  defaultWidth: SettingsCardWidth;
+  allowedWidths: SettingsCardWidth[];
+  content: ReactNode;
+};
+
+type ResolvedSettingsCard = SettingsCardDefinition & {
+  width: SettingsCardWidth;
 };
 
 type XPathSelectors = {
@@ -344,6 +369,8 @@ type RuntimeSourcePlugin = {
     title: string;
     renderer: string;
     placement?: string | null;
+    defaultWidth?: SettingsCardWidth;
+    allowedWidths?: SettingsCardWidth[];
   } | null;
   settingsPage?: PluginSettingsPage | null;
 };
@@ -1582,6 +1609,7 @@ function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [autoRefreshConfig, setAutoRefreshConfig] = useState<AutoRefreshConfig | null>(null);
   const [refreshTick, setRefreshTick] = useState<RefreshTickEvent | null>(null);
+  const [settingsLayout, setSettingsLayout] = useState<SettingsCardLayout | null>(null);
 
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === selectedSourceId),
@@ -1618,6 +1646,7 @@ function App() {
     void loadPluginMarkets();
     void loadXPathPluginPacks();
     void loadAutoRefreshConfig();
+    void loadSettingsLayout();
     // Listen for refresh-tick events from backend scheduler
     let unlisten: (() => void) | undefined;
     if (isTauriRuntime()) {
@@ -1812,6 +1841,33 @@ function App() {
       setAutoRefreshConfig(config);
     } catch {
       // Silently use defaults when backend is unavailable
+    }
+  }
+
+  async function loadSettingsLayout(): Promise<void> {
+    try {
+      const layout = await invoke<SettingsCardLayout>("get_settings_layout");
+      setSettingsLayout(layout);
+    } catch {
+      // Layout not persisted yet — use defaults
+    }
+  }
+
+  async function saveSettingsLayout(layout: SettingsCardLayout): Promise<void> {
+    try {
+      await invoke("set_settings_layout", { layout });
+      setSettingsLayout(layout);
+    } catch {
+      // Silently fail
+    }
+  }
+
+  async function resetSettingsLayout(): Promise<void> {
+    try {
+      await invoke("delete_settings_layout");
+      setSettingsLayout(null);
+    } catch {
+      // Silently fail
     }
   }
 
@@ -2701,6 +2757,278 @@ function App() {
   const resolvedThemeMode = resolveThemeMode(themeMode);
   const resolvedAppUiTheme = appUiThemeByMode[resolvedThemeMode];
   const resolvedAppUiPlugin = appUiPluginOptions.find((plugin) => plugin.id === resolvedAppUiTheme);
+  const settingsCards = useMemo<SettingsCardDefinition[]>(
+    () => [
+      {
+        id: "appearance",
+        defaultWidth: "one-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <article className="settings-card">
+            <div className="panel-heading">
+              <span>Appearance</span>
+              <span>{themeStatusLabel(themeMode)}</span>
+            </div>
+            <div className="settings-card-body">
+              <ThemeControl mode={themeMode} onChange={setThemeMode} />
+            </div>
+          </article>
+        ),
+      },
+      {
+        id: "wallet",
+        defaultWidth: "one-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <WalletLoginCard
+            chainId={chainId}
+            isBusy={isBusy}
+            isConnected={isConnected}
+            onConnect={() => void handleConnectWallet()}
+            onDisconnect={() => void handleWalletDisconnect()}
+            onSignIn={() => void handleWalletSignIn()}
+            session={walletSession}
+            walletAddress={walletAddress}
+          />
+        ),
+      },
+      {
+        id: "ai",
+        defaultWidth: "two-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <AiSettingsCard
+            disabled={isBusy}
+            onSave={(input) => void handleSaveAiSettings(input)}
+            settings={aiSettings}
+          />
+        ),
+      },
+      {
+        id: "rsshub",
+        defaultWidth: "two-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <RssHubSettingsCard
+            disabled={isBusy}
+            onAddInstance={(name, baseUrl) => void handleAddRssHubInstance(name, baseUrl)}
+            onCheckInstance={(baseUrl) => void handleCheckRssHubInstance(baseUrl)}
+            onGlobalInstanceChange={(instanceId) => void handleSetRssHubGlobalInstance(instanceId)}
+            settings={rssHubSettings}
+            status={rssHubStatus}
+          />
+        ),
+      },
+      ...installedRuntimePlugins.map((plugin): SettingsCardDefinition => {
+        const card = plugin.runtime?.settingsCard;
+        const defaultWidth = normalizeSettingsCardWidth(card?.defaultWidth, "two-column");
+        const allowedWidths = normalizeSettingsCardAllowedWidths(card?.allowedWidths, [defaultWidth]);
+        return {
+          id: `plugin:${plugin.id}:${card?.id ?? "default"}`,
+          defaultWidth,
+          allowedWidths,
+          content: (
+            <RuntimePluginSettingsCard
+              disabled={isBusy}
+              plugin={plugin}
+              selected={selectedRuntimePluginId === plugin.id}
+            />
+          ),
+        };
+      }),
+      {
+        id: "workspace",
+        defaultWidth: "one-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <article className="settings-card">
+            <div className="panel-heading">
+              <span>Workspace</span>
+              <span>{entryLayoutLabel(entryLayout)}</span>
+            </div>
+            <div className="settings-card-body">
+              <EntryLayoutControl layout={entryLayout} onChange={setEntryLayout} />
+              <dl>
+                <dt>Sources</dt><dd>{sources.length}</dd>
+                <dt>Unread</dt><dd>{unreadCount}</dd>
+                <dt>Alerts</dt><dd>{failedSourceCount}</dd>
+                <dt>Sidebar</dt><dd>{paneWidths.sidebar}px</dd>
+                <dt>Timeline</dt><dd>{paneWidths.timeline}px</dd>
+              </dl>
+              <button className="secondary-action" onClick={handleResetWorkspaceLayout} type="button">
+                Reset workspace layout
+              </button>
+            </div>
+          </article>
+        ),
+      },
+      {
+        id: "reader",
+        defaultWidth: "one-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <article className="settings-card">
+            <div className="panel-heading">
+              <span>Reader</span>
+              <span>{readerTypographyLabel(readerTypography)}</span>
+            </div>
+            <div className="settings-card-body">
+              <ReaderTypographyControl mode={readerTypography} onChange={setReaderTypography} />
+              <dl>
+                <dt>Body</dt><dd>{readerTypographyLabel(readerTypography)}</dd>
+                <dt>Actions</dt><dd>Sticky</dd>
+              </dl>
+            </div>
+          </article>
+        ),
+      },
+      {
+        id: "view-plugins",
+        defaultWidth: "two-column",
+        allowedWidths: ["two-column"],
+        content: (
+          <PluginSwitchboard
+            appUiThemeByMode={appUiThemeByMode}
+            appUiPlugins={appUiPluginOptions}
+            detailViewPlugin={detailViewPlugin}
+            installedViewPlugins={installedViewPlugins}
+            onActivateDetailView={setDetailViewPlugin}
+            onAssignTheme={handleAssignTheme}
+          />
+        ),
+      },
+      {
+        id: "auto-refresh",
+        defaultWidth: "two-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <article className="settings-card">
+            <div className="panel-heading">
+              <span>Auto Refresh</span>
+              <span>
+                {autoRefreshConfig?.enabled
+                  ? refreshTick?.refreshing
+                    ? "Refreshing..."
+                    : refreshTick?.nextRefreshAt
+                      ? `Next: ${formatCountdown(refreshTick.nextRefreshAt)}`
+                      : `Every ${formatInterval(autoRefreshConfig?.globalIntervalSeconds ?? 1800)}`
+                  : "Paused"}
+              </span>
+            </div>
+            <div className="settings-card-body">
+              <label className="preference-strip">
+                <span>Enable background refresh</span>
+                <input
+                  checked={autoRefreshConfig?.enabled ?? true}
+                  onChange={(e) => void handleToggleAutoRefresh(e.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+              <div>
+                <span className="preference-label">Global interval</span>
+                <div className="interval-presets">
+                  {REFRESH_INTERVAL_PRESETS.map((preset) => (
+                    <button
+                      key={preset.seconds}
+                      className={`chip ${(autoRefreshConfig?.globalIntervalSeconds ?? 1800) === preset.seconds ? "active" : ""}`}
+                      onClick={() => void handleSetGlobalRefreshInterval(preset.seconds)}
+                      type="button"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {autoRefreshConfig?.pluginOverrides && autoRefreshConfig.pluginOverrides.length > 0 ? (
+                <div>
+                  <span className="preference-label">Plugin overrides</span>
+                  <dl>
+                    {autoRefreshConfig.pluginOverrides.map((ov) => (
+                      <div className="settings-inline-row" key={ov.pluginId}>
+                        <dt>{ov.pluginName}</dt>
+                        <dd>
+                          <select
+                            value={ov.refreshIntervalSeconds}
+                            onChange={(e) =>
+                              void handleSetPluginRefreshInterval(ov.pluginId, Number(e.target.value))
+                            }
+                          >
+                            {REFRESH_INTERVAL_PRESETS.map((p) => (
+                              <option key={p.seconds} value={p.seconds}>{p.label}</option>
+                            ))}
+                          </select>
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ) : null}
+              {refreshTick?.refreshing ? (
+                <div className="preference-strip">
+                  <span>{refreshTick.currentSourceTitle ? `Refreshing: ${refreshTick.currentSourceTitle}` : "Checking sources..."}</span>
+                  <span>{refreshTick.sourcesRefreshed}/{refreshTick.sourcesChecked}</span>
+                </div>
+              ) : null}
+            </div>
+          </article>
+        ),
+      },
+      {
+        id: "reading-flow",
+        defaultWidth: "one-column",
+        allowedWidths: ["one-column", "two-column"],
+        content: (
+          <article className="settings-card">
+            <div className="panel-heading">
+              <span>Reading flow</span>
+              <span>{selectedArticle ? "Active" : "Idle"}</span>
+            </div>
+            <div className="settings-card-body">
+              <div className="preference-strip">
+                <span>{articles.length} queued</span>
+                <span>{selectedArticle ? "Article selected" : "No selection"}</span>
+                <span>{filterLabel(filterMode)}</span>
+              </div>
+              <dl>
+                <dt>Queue</dt><dd>{articles.length}</dd>
+                <dt>Selected</dt><dd>{selectedArticle?.title ?? "None"}</dd>
+                <dt>Filter</dt><dd>{filterLabel(filterMode)}</dd>
+              </dl>
+            </div>
+          </article>
+        ),
+      },
+    ],
+    [
+      themeMode,
+      chainId,
+      isBusy,
+      isConnected,
+      walletSession,
+      walletAddress,
+      aiSettings,
+      rssHubSettings,
+      rssHubStatus,
+      installedRuntimePlugins,
+      selectedRuntimePluginId,
+      entryLayout,
+      sources.length,
+      unreadCount,
+      failedSourceCount,
+      paneWidths.sidebar,
+      paneWidths.timeline,
+      readerTypography,
+      appUiThemeByMode,
+      appUiPluginOptions,
+      detailViewPlugin,
+      installedViewPlugins,
+      autoRefreshConfig,
+      refreshTick,
+      selectedArticle,
+      articles.length,
+      filterMode,
+    ],
+  );
   const shellStyle = {
     "--sidebar-width": `${paneWidths.sidebar}px`,
     "--timeline-width": `${paneWidths.timeline}px`,
@@ -3761,199 +4089,12 @@ function App() {
             </div>
           </header>
 
-          <section className="settings-grid">
-            <article className="settings-card">
-              <div className="panel-heading">
-                <span>Appearance</span>
-                <span>{themeStatusLabel(themeMode)}</span>
-              </div>
-              <ThemeControl mode={themeMode} onChange={setThemeMode} />
-            </article>
-
-            <WalletLoginCard
-              chainId={chainId}
-              isBusy={isBusy}
-              isConnected={isConnected}
-              onConnect={() => void handleConnectWallet()}
-              onDisconnect={() => void handleWalletDisconnect()}
-              onSignIn={() => void handleWalletSignIn()}
-              session={walletSession}
-              walletAddress={walletAddress}
-            />
-
-            <AiSettingsCard
-              disabled={isBusy}
-              onSave={(input) => void handleSaveAiSettings(input)}
-              settings={aiSettings}
-            />
-
-            <RssHubSettingsCard
-              disabled={isBusy}
-              onAddInstance={(name, baseUrl) => void handleAddRssHubInstance(name, baseUrl)}
-              onCheckInstance={(baseUrl) => void handleCheckRssHubInstance(baseUrl)}
-              onGlobalInstanceChange={(instanceId) => void handleSetRssHubGlobalInstance(instanceId)}
-              settings={rssHubSettings}
-              status={rssHubStatus}
-            />
-
-            {installedRuntimePlugins.map((plugin) => (
-              <RuntimePluginSettingsCard
-                disabled={isBusy}
-                key={plugin.id}
-                plugin={plugin}
-                selected={selectedRuntimePluginId === plugin.id}
-              />
-            ))}
-
-            <article className="settings-card">
-              <div className="panel-heading">
-                <span>Workspace</span>
-                <span>{entryLayoutLabel(entryLayout)}</span>
-              </div>
-              <EntryLayoutControl layout={entryLayout} onChange={setEntryLayout} />
-              <dl>
-                <dt>Sources</dt>
-                <dd>{sources.length}</dd>
-                <dt>Unread</dt>
-                <dd>{unreadCount}</dd>
-                <dt>Alerts</dt>
-                <dd>{failedSourceCount}</dd>
-                <dt>Sidebar</dt>
-                <dd>{paneWidths.sidebar}px</dd>
-                <dt>Timeline</dt>
-                <dd>{paneWidths.timeline}px</dd>
-              </dl>
-              <button className="secondary-action" onClick={handleResetWorkspaceLayout} type="button">
-                Reset workspace layout
-              </button>
-            </article>
-
-            <article className="settings-card">
-              <div className="panel-heading">
-                <span>Reader</span>
-                <span>{readerTypographyLabel(readerTypography)}</span>
-              </div>
-              <ReaderTypographyControl
-                mode={readerTypography}
-                onChange={setReaderTypography}
-              />
-              <dl>
-                <dt>Body</dt>
-                <dd>{readerTypographyLabel(readerTypography)}</dd>
-                <dt>Actions</dt>
-                <dd>Sticky</dd>
-              </dl>
-            </article>
-
-            <PluginSwitchboard
-              appUiThemeByMode={appUiThemeByMode}
-              appUiPlugins={appUiPluginOptions}
-              detailViewPlugin={detailViewPlugin}
-              installedViewPlugins={installedViewPlugins}
-              onActivateDetailView={setDetailViewPlugin}
-              onAssignTheme={handleAssignTheme}
-            />
-
-            <article className="settings-card">
-              <div className="panel-heading">
-                <span>Auto Refresh</span>
-                <span>
-                  {autoRefreshConfig?.enabled
-                    ? refreshTick?.refreshing
-                      ? "Refreshing…"
-                      : refreshTick?.nextRefreshAt
-                        ? `Next: ${formatCountdown(refreshTick.nextRefreshAt)}`
-                        : `Every ${formatInterval(autoRefreshConfig?.globalIntervalSeconds ?? 1800)}`
-                    : "Paused"}
-                </span>
-              </div>
-              <label className="preference-strip">
-                <span>Enable background refresh</span>
-                <input
-                  type="checkbox"
-                  checked={autoRefreshConfig?.enabled ?? true}
-                  onChange={(e) => void handleToggleAutoRefresh(e.target.checked)}
-                />
-              </label>
-              <div style={{ marginTop: "0.75rem" }}>
-                <span className="preference-label">Global interval</span>
-                <div className="interval-presets" style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.35rem" }}>
-                  {REFRESH_INTERVAL_PRESETS.map((preset) => (
-                    <button
-                      key={preset.seconds}
-                      className={`chip ${
-                        (autoRefreshConfig?.globalIntervalSeconds ?? 1800) === preset.seconds
-                          ? "active"
-                          : ""
-                      }`}
-                      onClick={() => void handleSetGlobalRefreshInterval(preset.seconds)}
-                      type="button"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {autoRefreshConfig?.pluginOverrides && autoRefreshConfig.pluginOverrides.length > 0 ? (
-                <div style={{ marginTop: "0.75rem" }}>
-                  <span className="preference-label">Plugin overrides</span>
-                  <dl style={{ marginTop: "0.35rem" }}>
-                    {autoRefreshConfig.pluginOverrides.map((ov) => (
-                      <div key={ov.pluginId} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.25rem 0" }}>
-                        <dt style={{ flex: 1 }}>{ov.pluginName}</dt>
-                        <dd>
-                          <select
-                            value={ov.refreshIntervalSeconds}
-                            onChange={(e) =>
-                              void handleSetPluginRefreshInterval(ov.pluginId, Number(e.target.value))
-                            }
-                          >
-                            {REFRESH_INTERVAL_PRESETS.map((p) => (
-                              <option key={p.seconds} value={p.seconds}>
-                                {p.label}
-                              </option>
-                            ))}
-                          </select>
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-              ) : null}
-              {refreshTick?.refreshing ? (
-                <div className="preference-strip" style={{ marginTop: "0.75rem" }}>
-                  <span>
-                    {refreshTick.currentSourceTitle
-                      ? `Refreshing: ${refreshTick.currentSourceTitle}`
-                      : "Checking sources…"}
-                  </span>
-                  <span>
-                    {refreshTick.sourcesRefreshed}/{refreshTick.sourcesChecked}
-                  </span>
-                </div>
-              ) : null}
-            </article>
-
-            <article className="settings-card">
-              <div className="panel-heading">
-                <span>Reading flow</span>
-                <span>{selectedArticle ? "Active" : "Idle"}</span>
-              </div>
-              <div className="preference-strip">
-                <span>{articles.length} queued</span>
-                <span>{selectedArticle ? "Article selected" : "No selection"}</span>
-                <span>{filterLabel(filterMode)}</span>
-              </div>
-              <dl>
-                <dt>Queue</dt>
-                <dd>{articles.length}</dd>
-                <dt>Selected</dt>
-                <dd>{selectedArticle?.title ?? "None"}</dd>
-                <dt>Filter</dt>
-                <dd>{filterLabel(filterMode)}</dd>
-              </dl>
-            </article>
-          </section>
+          <SettingsShellGrid
+            cards={settingsCards}
+            settingsLayout={settingsLayout}
+            onLayoutChange={(layout) => void saveSettingsLayout(layout)}
+            onReset={() => void resetSettingsLayout()}
+          />
         </section>
       ) : null}
 
@@ -4015,6 +4156,205 @@ function App() {
       ) : null}
     </main>
   );
+}
+
+function SettingsShellGrid({
+  cards,
+  settingsLayout,
+  onLayoutChange,
+  onReset,
+}: {
+  cards: SettingsCardDefinition[];
+  settingsLayout: SettingsCardLayout | null;
+  onLayoutChange: (layout: SettingsCardLayout) => void;
+  onReset: () => void;
+}) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const resolved = useMemo(
+    () => resolveSettingsCards(cards, settingsLayout),
+    [cards, settingsLayout],
+  );
+
+  const commitLayout = (nextCards: ResolvedSettingsCard[]) => {
+    onLayoutChange(layoutFromResolvedCards(nextCards));
+  };
+
+  const moveCard = (activeId: string, targetId: string) => {
+    if (!activeId || activeId === targetId) return;
+    commitLayout(reorderResolvedCards(resolved, activeId, targetId));
+  };
+
+  const toggleWidth = (card: ResolvedSettingsCard) => {
+    if (card.allowedWidths.length < 2) return;
+    const nextWidth = nextSettingsCardWidth(card);
+    commitLayout(
+      resolved.map((entry) =>
+        entry.id === card.id ? { ...entry, width: nextWidth } : entry,
+      ),
+    );
+  };
+
+  const handleDragStart = (event: DragEvent<HTMLDivElement>, cardId: string) => {
+    setDraggingId(cardId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", cardId);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>, cardId: string) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    if (dropTargetId !== cardId) {
+      setDropTargetId(cardId);
+    }
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>, targetId: string) => {
+    event.preventDefault();
+    const activeId = event.dataTransfer.getData("text/plain") || draggingId;
+    if (activeId) {
+      moveCard(activeId, targetId);
+    }
+    setDraggingId(null);
+    setDropTargetId(null);
+  };
+
+  const clearDragState = () => {
+    setDraggingId(null);
+    setDropTargetId(null);
+  };
+
+  return (
+    <div className="settings-grid">
+      {resolved.map((entry) => (
+        <div
+          key={entry.id}
+          className={`settings-card-shell ${draggingId === entry.id ? "is-dragging" : ""} ${dropTargetId === entry.id ? "is-drop-target" : ""}`}
+          data-width={entry.width}
+          onDragOver={(event) => handleDragOver(event, entry.id)}
+          onDrop={(event) => handleDrop(event, entry.id)}
+        >
+          <div
+            aria-label={`Move ${entry.id}`}
+            className="settings-card-shell-toolbar"
+            draggable
+            onDragEnd={clearDragState}
+            onDragStart={(event) => handleDragStart(event, entry.id)}
+            role="button"
+            tabIndex={0}
+          >
+            <span className="settings-drag-handle">Move</span>
+            {entry.allowedWidths.length > 1 ? (
+              <button
+                className="settings-card-width-btn"
+                onClick={() => toggleWidth(entry)}
+                type="button"
+              >
+                {entry.width === "one-column" ? "1 col" : "2 col"}
+              </button>
+            ) : (
+              <span className="settings-card-width-lock">
+                {entry.width === "one-column" ? "1 col" : "2 col"}
+              </span>
+            )}
+          </div>
+          <div className="settings-card-shell-body">
+            {entry.content}
+          </div>
+        </div>
+      ))}
+      <button
+        className="secondary-action"
+        onClick={onReset}
+        type="button"
+        style={{ gridColumn: "1 / -1", marginTop: "8px" }}
+      >
+        Reset Settings Layout
+      </button>
+    </div>
+  );
+}
+
+function resolveSettingsCards(
+  cards: SettingsCardDefinition[],
+  persisted: SettingsCardLayout | null,
+): ResolvedSettingsCard[] {
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  const resolved: ResolvedSettingsCard[] = [];
+  const seen = new Set<string>();
+
+  const savedCards = [...(persisted?.cards ?? [])]
+    .filter((entry) => entry.visible !== false)
+    .sort((a, b) => a.order - b.order);
+
+  for (const entry of savedCards) {
+    const card = byId.get(entry.id);
+    if (!card || seen.has(card.id)) continue;
+    const savedWidth = normalizeSettingsCardWidth(entry.width, card.defaultWidth);
+    const width = card.allowedWidths.includes(savedWidth) ? savedWidth : card.defaultWidth;
+    resolved.push({ ...card, width });
+    seen.add(card.id);
+  }
+
+  for (const card of cards) {
+    if (!seen.has(card.id)) {
+      resolved.push({ ...card, width: card.defaultWidth });
+    }
+  }
+
+  return resolved;
+}
+
+function layoutFromResolvedCards(cards: ResolvedSettingsCard[]): SettingsCardLayout {
+  return {
+    version: 1,
+    cards: cards.map((card, order) => ({
+      id: card.id,
+      order,
+      visible: true,
+      width: card.width,
+    })),
+  };
+}
+
+function reorderResolvedCards(
+  cards: ResolvedSettingsCard[],
+  activeId: string,
+  targetId: string,
+): ResolvedSettingsCard[] {
+  const nextCards = [...cards];
+  const activeIndex = nextCards.findIndex((card) => card.id === activeId);
+  const targetIndex = nextCards.findIndex((card) => card.id === targetId);
+  if (activeIndex < 0 || targetIndex < 0 || activeIndex === targetIndex) {
+    return cards;
+  }
+
+  const [activeCard] = nextCards.splice(activeIndex, 1);
+  nextCards.splice(targetIndex, 0, activeCard);
+  return nextCards;
+}
+
+function nextSettingsCardWidth(card: ResolvedSettingsCard): SettingsCardWidth {
+  const index = card.allowedWidths.indexOf(card.width);
+  const nextIndex = index < 0 ? 0 : (index + 1) % card.allowedWidths.length;
+  return card.allowedWidths[nextIndex] ?? card.defaultWidth;
+}
+
+function normalizeSettingsCardWidth(
+  value: string | null | undefined,
+  fallback: SettingsCardWidth,
+): SettingsCardWidth {
+  return value === "one-column" || value === "two-column" ? value : fallback;
+}
+
+function normalizeSettingsCardAllowedWidths(
+  value: SettingsCardWidth[] | string[] | null | undefined,
+  fallback: SettingsCardWidth[],
+): SettingsCardWidth[] {
+  const widths = (value ?? [])
+    .filter((entry): entry is SettingsCardWidth => entry === "one-column" || entry === "two-column")
+    .filter((entry, index, entries) => entries.indexOf(entry) === index);
+  return widths.length > 0 ? widths : fallback;
 }
 
 function IconRail({
