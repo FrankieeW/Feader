@@ -325,6 +325,22 @@ pub async fn refresh_all_sources(
     Ok(results)
 }
 
+/// Enable or disable instance fallback for one RSSHub source.
+#[tauri::command]
+pub fn set_rsshub_source_fallback(
+    source_id: i64,
+    allow_fallback: bool,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source> {
+    let source = database.get_source(source_id)?;
+    if source.kind != SOURCE_KIND_RSSHUB {
+        return Err("Fallback can only be changed for RSSHub sources".into());
+    }
+    let mut config = parse_rsshub_source_config(&source)?;
+    config.allow_fallback = allow_fallback;
+    Ok(database.update_rsshub_source_config(source.id, &config)?)
+}
+
 /// Fetch an RSSHub route, retrying across the source's fallback candidates in order.
 pub(crate) async fn fetch_rsshub_with_fallback(
     database: &AppDatabase,
@@ -419,4 +435,34 @@ fn apply_plugin_cookie(database: &AppDatabase, mut selectors: XPathSelectors) ->
     selectors.cookie =
         xpath_adapter::resolve_cookie(selectors.cookie.as_deref(), plugin_cookie.as_deref());
     selectors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::RssHubSourceConfig;
+
+    #[test]
+    fn set_fallback_updates_source_config() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = RssHubSourceConfig {
+            route: "/github/trending/daily/rust".to_string(),
+            instance_id: None,
+            allow_fallback: true,
+        };
+        let source = database
+            .add_rsshub_source("/github/trending/daily/rust", Some("GH"), &config)
+            .expect("add");
+
+        let updated = database
+            .update_rsshub_source_config(
+                source.id,
+                &RssHubSourceConfig { allow_fallback: false, ..config.clone() },
+            )
+            .expect("update");
+
+        let stored: RssHubSourceConfig =
+            serde_json::from_str(updated.config_json.as_deref().unwrap()).unwrap();
+        assert!(!stored.allow_fallback);
+    }
 }
