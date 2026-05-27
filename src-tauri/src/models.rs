@@ -88,6 +88,8 @@ pub struct RssHubInstance {
 pub struct RssHubSettings {
     pub global_instance_id: String,
     pub instances: Vec<RssHubInstance>,
+    #[serde(default)]
+    pub order: Vec<String>,
 }
 
 /// Source-level RSSHub route configuration.
@@ -97,6 +99,8 @@ pub struct RssHubSourceConfig {
     pub route: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub allow_fallback: bool,
 }
 
 /// Request body for adding an RSSHub route source.

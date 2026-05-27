@@ -89,6 +89,8 @@ pub fn run() {
             commands::rsshub::set_rsshub_global_instance,
             commands::rsshub::add_rsshub_instance,
             commands::rsshub::check_rsshub_instance,
+            commands::rsshub::set_rsshub_instance_order,
+            commands::sources::set_rsshub_source_fallback,
             commands::marketplace::list_xpath_plugin_packs,
             commands::marketplace::fetch_registry_packs,
             commands::sources::suggest_xpath_source,

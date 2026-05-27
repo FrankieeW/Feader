@@ -265,11 +265,13 @@ type RssHubInstance = {
 type RssHubSettings = {
   globalInstanceId: string;
   instances: RssHubInstance[];
+  order: string[];
 };
 
 type RssHubSourceConfig = {
   route: string;
   instanceId?: string | null;
+  allowFallback: boolean;
 };
 
 type RssHubInstanceCheck = {
@@ -638,6 +640,7 @@ const defaultAiSettings: AiSettings = {
 
 const defaultRssHubSettings: RssHubSettings = {
   globalInstanceId: "rsshub-rssforever",
+  order: [],
   instances: [
     {
       id: "rsshub-app",
@@ -1097,17 +1100,53 @@ async function testModeInvoke<T>(command: string, args?: Record<string, unknown>
       }
       return testModeRssHubSettings as T;
     }
+    case "set_rsshub_instance_order": {
+      const order = Array.isArray(args?.order) ? args.order.map(String) : [];
+      const rank = new Map(order.map((id, index) => [id, index]));
+      testModeRssHubSettings = {
+        ...testModeRssHubSettings,
+        order,
+        instances: [...testModeRssHubSettings.instances].sort((left, right) => {
+          const leftRank = rank.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+          const rightRank = rank.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+          return leftRank - rightRank;
+        }),
+      };
+      return testModeRssHubSettings as T;
+    }
     case "update_rsshub_source_instance": {
       const request = args?.request as { sourceId?: number; instanceId?: string | null } | undefined;
       const sourceId = Number(request?.sourceId);
       testModeSourceState = testModeSourceState.map((source) => {
         if (source.id !== sourceId || source.kind !== "rsshub") return source;
-        const config = readRssHubConfigFromSource(source) ?? { route: source.url };
+        const config = readRssHubConfigFromSource(source) ?? {
+          route: source.url,
+          allowFallback: true,
+        };
         return {
           ...source,
           configJson: JSON.stringify({
             ...config,
             instanceId: request?.instanceId || undefined,
+          }),
+        };
+      });
+      return testModeSourceState.find((source) => source.id === sourceId) as T;
+    }
+    case "set_rsshub_source_fallback": {
+      const sourceId = Number(args?.sourceId);
+      const allowFallback = Boolean(args?.allowFallback);
+      testModeSourceState = testModeSourceState.map((source) => {
+        if (source.id !== sourceId || source.kind !== "rsshub") return source;
+        const config = readRssHubConfigFromSource(source) ?? {
+          route: source.url,
+          allowFallback: true,
+        };
+        return {
+          ...source,
+          configJson: JSON.stringify({
+            ...config,
+            allowFallback,
           }),
         };
       });
@@ -1440,6 +1479,7 @@ function upsertTestModeRssHubSource(
   const config: RssHubSourceConfig = {
     route: normalizedRoute,
     instanceId: instanceId || undefined,
+    allowFallback: true,
   };
   const source: Source = {
     id: Math.max(0, ...testModeSourceState.map((item) => item.id)) + 1,
@@ -2219,6 +2259,14 @@ function App() {
     });
   }
 
+  async function handleSetRssHubInstanceOrder(order: string[]): Promise<void> {
+    await runTask("Saving RSSHub order", async () => {
+      const next = await invoke<RssHubSettings>("set_rsshub_instance_order", { order });
+      setRssHubSettings(next);
+      setStatus("RSSHub instance priority updated");
+    });
+  }
+
   async function handleAddRssHubInstance(name: string, baseUrl: string): Promise<void> {
     await runTask("Adding RSSHub instance", async () => {
       const next = await invoke<RssHubSettings>("add_rsshub_instance", {
@@ -2697,6 +2745,17 @@ function App() {
     });
   }
 
+  async function handleSetSourceRssHubFallback(
+    sourceId: number,
+    allowFallback: boolean,
+  ): Promise<void> {
+    await runTask("Updating RSSHub source", async () => {
+      await invoke<Source>("set_rsshub_source_fallback", { sourceId, allowFallback });
+      await loadData(selectedSourceId, filterMode, selectedArticleId);
+      setStatus(`RSSHub fallback ${allowFallback ? "enabled" : "disabled"}`);
+    });
+  }
+
   function formatInterval(seconds: number): string {
     if (seconds < 120) return `${seconds}s`;
     if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -2814,6 +2873,7 @@ function App() {
             onAddInstance={(name, baseUrl) => void handleAddRssHubInstance(name, baseUrl)}
             onCheckInstance={(baseUrl) => void handleCheckRssHubInstance(baseUrl)}
             onGlobalInstanceChange={(instanceId) => void handleSetRssHubGlobalInstance(instanceId)}
+            onInstanceOrderChange={(order) => void handleSetRssHubInstanceOrder(order)}
             settings={rssHubSettings}
             status={rssHubStatus}
           />
@@ -3480,6 +3540,9 @@ function App() {
               }
               onSetRssHubInstance={(id, instanceId) =>
                 void handleSetSourceRssHubInstance(id, instanceId)
+              }
+              onSetRssHubFallback={(id, allowFallback) =>
+                void handleSetSourceRssHubFallback(id, allowFallback)
               }
               onStartXPathEdit={() => handleStartEditXPathSource(selectedManagerSource)}
               onXPathSelectorsChange={setEditXPathSelectors}
@@ -4655,6 +4718,7 @@ function RssHubSettingsCard({
   onAddInstance,
   onCheckInstance,
   onGlobalInstanceChange,
+  onInstanceOrderChange,
   settings,
   status,
 }: {
@@ -4662,6 +4726,7 @@ function RssHubSettingsCard({
   onAddInstance: (name: string, baseUrl: string) => void;
   onCheckInstance: (baseUrl: string) => void;
   onGlobalInstanceChange: (instanceId: string) => void;
+  onInstanceOrderChange: (order: string[]) => void;
   settings: RssHubSettings;
   status: string | null;
 }) {
@@ -4670,6 +4735,13 @@ function RssHubSettingsCard({
   const globalInstance =
     settings.instances.find((instance) => instance.id === settings.globalInstanceId) ??
     settings.instances[0];
+  const moveInstance = (index: number, direction: -1 | 1) => {
+    const next = [...settings.instances];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onInstanceOrderChange(next.map((instance) => instance.id));
+  };
 
   return (
     <article className="settings-card rsshub-settings-card">
@@ -4692,15 +4764,31 @@ function RssHubSettingsCard({
         </select>
       </label>
       <div className="rsshub-instance-list">
-        {settings.instances.map((instance) => (
+        {settings.instances.map((instance, index) => (
           <div className="rsshub-instance-row" key={instance.id}>
             <div>
               <strong>{instance.name}</strong>
               <span>{instance.baseUrl}</span>
             </div>
-            <button disabled={disabled} onClick={() => onCheckInstance(instance.baseUrl)} type="button">
-              Check
-            </button>
+            <div className="rsshub-instance-actions">
+              <button
+                disabled={disabled || index === 0}
+                onClick={() => moveInstance(index, -1)}
+                type="button"
+              >
+                Up
+              </button>
+              <button
+                disabled={disabled || index === settings.instances.length - 1}
+                onClick={() => moveInstance(index, 1)}
+                type="button"
+              >
+                Down
+              </button>
+              <button disabled={disabled} onClick={() => onCheckInstance(instance.baseUrl)} type="button">
+                Check
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -5068,6 +5156,7 @@ function SourceDetailPanel({
   onSaveXPath,
   onSetCategory,
   onSetRefreshInterval,
+  onSetRssHubFallback,
   onSetRssHubInstance,
   onStartXPathEdit,
   onXPathSelectorsChange,
@@ -5088,6 +5177,7 @@ function SourceDetailPanel({
   onSaveXPath: () => void;
   onSetCategory: (sourceId: number, category: string) => void;
   onSetRefreshInterval: (sourceId: number, seconds: number | null) => void;
+  onSetRssHubFallback: (sourceId: number, allowFallback: boolean) => void;
   onSetRssHubInstance: (sourceId: number, instanceId: string | null) => void;
   onStartXPathEdit: () => void;
   onXPathSelectorsChange: (selectors: XPathSelectors) => void;
@@ -5189,6 +5279,20 @@ function SourceDetailPanel({
                       </option>
                     ))}
                   </select>
+                </dd>
+                <dt>Fallback</dt>
+                <dd>
+                  <label className="source-toggle">
+                    <input
+                      checked={rssHubConfig?.allowFallback ?? true}
+                      disabled={isBusy}
+                      onChange={(event) =>
+                        onSetRssHubFallback(source.id, event.currentTarget.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>Try other instances when the primary fails</span>
+                  </label>
                 </dd>
               </>
             ) : null}
@@ -6731,16 +6835,19 @@ function readXPathSelectorsFromSource(source: Source): XPathSelectors {
 
 function readRssHubConfigFromSource(source: Source): RssHubSourceConfig | null {
   if (!source.configJson) {
-    return { route: source.url };
+    return { route: source.url, allowFallback: true };
   }
   try {
-    const config = JSON.parse(source.configJson) as RssHubSourceConfig;
+    const config = JSON.parse(source.configJson) as RssHubSourceConfig & {
+      allow_fallback?: boolean;
+    };
     return {
       route: config.route?.trim() || source.url,
       instanceId: config.instanceId || null,
+      allowFallback: config.allowFallback ?? config.allow_fallback ?? true,
     };
   } catch {
-    return { route: source.url };
+    return { route: source.url, allowFallback: true };
   }
 }
 

@@ -1,6 +1,9 @@
 //! Feed source commands: create, preview, update, delete, and refresh.
 
-use crate::commands::rsshub::{build_rsshub_url, normalize_rsshub_route, resolve_rsshub_instance};
+use crate::commands::rsshub::{
+    build_rsshub_url, format_fallback_error, normalize_rsshub_route, resolve_rsshub_candidates,
+    resolve_rsshub_instance,
+};
 use crate::db::AppDatabase;
 use crate::error::Result;
 use crate::models::{
@@ -84,9 +87,6 @@ pub async fn add_rsshub_source(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Source> {
     let route = normalize_rsshub_route(&request.route)?;
-    let instance = resolve_rsshub_instance(&database, request.instance_id.as_deref())?;
-    let feed_url = build_rsshub_url(&instance, &route)?;
-    let feed = feed_adapter::fetch_feed(&feed_url).await?;
     let config = RssHubSourceConfig {
         route: route.clone(),
         instance_id: request
@@ -94,7 +94,9 @@ pub async fn add_rsshub_source(
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(|value| value.to_string()),
+        allow_fallback: true,
     };
+    let feed = fetch_rsshub_with_fallback(&database, &config).await?;
     let source = database.add_rsshub_source(
         &route,
         request
@@ -323,6 +325,48 @@ pub async fn refresh_all_sources(
     Ok(results)
 }
 
+/// Enable or disable instance fallback for one RSSHub source.
+#[tauri::command]
+pub fn set_rsshub_source_fallback(
+    source_id: i64,
+    allow_fallback: bool,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<Source> {
+    apply_rsshub_source_fallback(&database, source_id, allow_fallback)
+}
+
+/// Core of `set_rsshub_source_fallback`, testable without a `tauri::State`.
+pub(crate) fn apply_rsshub_source_fallback(
+    database: &AppDatabase,
+    source_id: i64,
+    allow_fallback: bool,
+) -> Result<Source> {
+    let source = database.get_source(source_id)?;
+    if source.kind != SOURCE_KIND_RSSHUB {
+        return Err("Fallback can only be changed for RSSHub sources".into());
+    }
+    let mut config = parse_rsshub_source_config(&source)?;
+    config.allow_fallback = allow_fallback;
+    Ok(database.update_rsshub_source_config(source.id, &config)?)
+}
+
+/// Fetch an RSSHub route, retrying across the source's fallback candidates in order.
+pub(crate) async fn fetch_rsshub_with_fallback(
+    database: &AppDatabase,
+    config: &RssHubSourceConfig,
+) -> Result<crate::models::ParsedFeed> {
+    let candidates = resolve_rsshub_candidates(database, config)?;
+    let mut failures: Vec<(String, String)> = Vec::new();
+    for instance in &candidates {
+        let url = build_rsshub_url(instance, &config.route)?;
+        match feed_adapter::fetch_feed(&url).await {
+            Ok(feed) => return Ok(feed),
+            Err(error) => failures.push((instance.name.clone(), error.to_string())),
+        }
+    }
+    Err(format_fallback_error(&failures).into())
+}
+
 /// Refresh one source by kind and merge the parsed articles into the database.
 pub(crate) async fn refresh_source_record(
     database: &AppDatabase,
@@ -332,9 +376,7 @@ pub(crate) async fn refresh_source_record(
         SOURCE_KIND_RSS => feed_adapter::fetch_feed(&source.url).await,
         SOURCE_KIND_RSSHUB => {
             let config = parse_rsshub_source_config(source)?;
-            let instance = resolve_rsshub_instance(database, config.instance_id.as_deref())?;
-            let url = build_rsshub_url(&instance, &config.route)?;
-            feed_adapter::fetch_feed(&url).await
+            fetch_rsshub_with_fallback(database, &config).await
         }
         SOURCE_KIND_XPATH => {
             let selectors = apply_plugin_cookie(database, parse_xpath_selectors(source)?);
@@ -402,4 +444,42 @@ fn apply_plugin_cookie(database: &AppDatabase, mut selectors: XPathSelectors) ->
     selectors.cookie =
         xpath_adapter::resolve_cookie(selectors.cookie.as_deref(), plugin_cookie.as_deref());
     selectors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::RssHubSourceConfig;
+
+    #[test]
+    fn set_fallback_rejects_non_rsshub_source() {
+        let database = AppDatabase::in_memory().expect("db");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("add rss");
+
+        let result = apply_rsshub_source_fallback(&database, source.id, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_fallback_updates_source_config() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = RssHubSourceConfig {
+            route: "/github/trending/daily/rust".to_string(),
+            instance_id: None,
+            allow_fallback: true,
+        };
+        let source = database
+            .add_rsshub_source("/github/trending/daily/rust", Some("GH"), &config)
+            .expect("add");
+
+        let updated =
+            apply_rsshub_source_fallback(&database, source.id, false).expect("set fallback");
+        assert_eq!(updated.kind, SOURCE_KIND_RSSHUB);
+
+        let stored: RssHubSourceConfig =
+            serde_json::from_str(updated.config_json.as_deref().unwrap()).unwrap();
+        assert!(!stored.allow_fallback);
+    }
 }
