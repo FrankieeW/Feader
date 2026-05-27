@@ -825,6 +825,13 @@ select:disabled {
   min-width: 0;
 }
 
+.rsshub-instance-row .rsshub-instance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
 .rsshub-instance-row strong,
 .rsshub-instance-row span {
   overflow: hidden;
@@ -1465,6 +1472,19 @@ select:disabled {
   margin: 0;
   color: var(--color-muted);
   overflow-wrap: anywhere;
+}
+
+.source-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.source-toggle input {
+  margin-top: 2px;
 }
 
 .xpath-selector-summary {
