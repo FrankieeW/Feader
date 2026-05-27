@@ -95,6 +95,7 @@ fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings> {
         .unwrap_or_else(|| RssHubSettings {
             global_instance_id: RSSHUB_DEFAULT_INSTANCE_ID.to_string(),
             instances: Vec::new(),
+            order: Vec::new(),
         });
 
     let mut instances = builtin_rsshub_instances();
@@ -114,6 +115,15 @@ fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings> {
         settings.global_instance_id = RSSHUB_DEFAULT_INSTANCE_ID.to_string();
     }
     settings.instances = instances;
+    if !settings.order.is_empty() {
+        let order = settings.order.clone();
+        settings.instances.sort_by_key(|instance| {
+            order
+                .iter()
+                .position(|id| id == &instance.id)
+                .unwrap_or(usize::MAX)
+        });
+    }
     Ok(settings)
 }
 
@@ -253,6 +263,18 @@ pub fn add_rsshub_instance(
     load_rsshub_settings(&database)
 }
 
+/// Set the user-preferred priority order of RSSHub instances (by id).
+#[tauri::command]
+pub fn set_rsshub_instance_order(
+    order: Vec<String>,
+    database: tauri::State<'_, AppDatabase>,
+) -> Result<RssHubSettings> {
+    let mut settings = load_rsshub_settings(&database)?;
+    settings.order = order;
+    save_rsshub_settings(&database, &settings)?;
+    load_rsshub_settings(&database)
+}
+
 /// Probe an RSSHub instance health endpoint.
 #[tauri::command]
 pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceCheck> {
@@ -286,6 +308,29 @@ mod tests {
             serde_json::from_str(r#"{"route":"/github/trending/daily/rust"}"#).unwrap();
         assert!(config.allow_fallback);
         assert!(config.instance_id.is_none());
+    }
+
+    #[test]
+    fn rsshub_instance_order_is_applied() {
+        let database = AppDatabase::in_memory().expect("database opens");
+        let default = load_rsshub_settings(&database).expect("load");
+        // Move the second builtin to the front.
+        let second_id = default.instances[1].id.clone();
+        let mut order: Vec<String> = vec![second_id.clone()];
+        order.extend(
+            default
+                .instances
+                .iter()
+                .map(|i| i.id.clone())
+                .filter(|id| id != &second_id),
+        );
+
+        let mut settings = load_rsshub_settings(&database).expect("load");
+        settings.order = order;
+        save_rsshub_settings(&database, &settings).expect("save");
+
+        let reloaded = load_rsshub_settings(&database).expect("reload");
+        assert_eq!(reloaded.instances[0].id, second_id);
     }
 
     #[test]
