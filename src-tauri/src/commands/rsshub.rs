@@ -202,6 +202,42 @@ pub(crate) fn resolve_rsshub_instance(
         .ok_or_else(|| format!("RSSHub instance '{selected_id}' is not configured").into())
 }
 
+/// Build the ordered list of instances to try for a source: primary first,
+/// then the rest of the configured instances in priority order when fallback is allowed.
+pub(crate) fn resolve_rsshub_candidates(
+    database: &AppDatabase,
+    config: &crate::models::RssHubSourceConfig,
+) -> Result<Vec<RssHubInstance>> {
+    let settings = load_rsshub_settings(database)?;
+    let primary_id = config
+        .instance_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&settings.global_instance_id)
+        .to_string();
+
+    let primary = settings
+        .instances
+        .iter()
+        .find(|instance| instance.id == primary_id)
+        .cloned()
+        .ok_or_else(|| {
+            FeaderError::Message(format!("RSSHub instance '{primary_id}' is not configured"))
+        })?;
+
+    if !config.allow_fallback {
+        return Ok(vec![primary]);
+    }
+
+    let mut candidates = vec![primary.clone()];
+    for instance in settings.instances {
+        if instance.id != primary.id {
+            candidates.push(instance);
+        }
+    }
+    Ok(candidates)
+}
+
 /// Return configured RSSHub instances and the global default.
 #[tauri::command]
 pub fn get_rsshub_settings(
@@ -301,6 +337,7 @@ pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceChe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::RssHubSourceConfig;
 
     #[test]
     fn rsshub_source_config_defaults_allow_fallback_true() {
@@ -331,6 +368,49 @@ mod tests {
 
         let reloaded = load_rsshub_settings(&database).expect("reload");
         assert_eq!(reloaded.instances[0].id, second_id);
+    }
+
+    fn rsshub_config(instance_id: Option<&str>, allow_fallback: bool) -> RssHubSourceConfig {
+        RssHubSourceConfig {
+            route: "/github/trending/daily/rust".to_string(),
+            instance_id: instance_id.map(|s| s.to_string()),
+            allow_fallback,
+        }
+    }
+
+    #[test]
+    fn candidates_without_fallback_is_primary_only() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = rsshub_config(Some("rsshub-app"), false);
+        let candidates = resolve_rsshub_candidates(&database, &config).expect("candidates");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "rsshub-app");
+    }
+
+    #[test]
+    fn candidates_with_fallback_lists_primary_first_then_rest() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = rsshub_config(Some("rsshub-app"), true);
+        let candidates = resolve_rsshub_candidates(&database, &config).expect("candidates");
+        assert!(candidates.len() > 1);
+        assert_eq!(candidates[0].id, "rsshub-app");
+        assert!(candidates.iter().filter(|c| c.id == "rsshub-app").count() == 1);
+    }
+
+    #[test]
+    fn candidates_use_global_default_when_no_override() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = rsshub_config(None, true);
+        let settings = load_rsshub_settings(&database).expect("settings");
+        let candidates = resolve_rsshub_candidates(&database, &config).expect("candidates");
+        assert_eq!(candidates[0].id, settings.global_instance_id);
+    }
+
+    #[test]
+    fn candidates_error_on_unknown_primary() {
+        let database = AppDatabase::in_memory().expect("db");
+        let config = rsshub_config(Some("does-not-exist"), true);
+        assert!(resolve_rsshub_candidates(&database, &config).is_err());
     }
 
     #[test]
