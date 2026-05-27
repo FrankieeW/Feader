@@ -202,6 +202,15 @@ pub(crate) fn resolve_rsshub_instance(
         .ok_or_else(|| format!("RSSHub instance '{selected_id}' is not configured").into())
 }
 
+/// Compose a single error message summarising every instance that failed during fallback.
+pub(crate) fn format_fallback_error(failures: &[(String, String)]) -> String {
+    let mut message = String::from("All RSSHub instances failed:");
+    for (name, error) in failures {
+        message.push_str(&format!("\n- {name}: {error}"));
+    }
+    message
+}
+
 /// Build the ordered list of instances to try for a source: primary first,
 /// then the rest of the configured instances in priority order when fallback is allowed.
 pub(crate) fn resolve_rsshub_candidates(
@@ -368,6 +377,18 @@ mod tests {
 
         let reloaded = load_rsshub_settings(&database).expect("reload");
         assert_eq!(reloaded.instances[0].id, second_id);
+    }
+
+    #[test]
+    fn fallback_error_lists_each_instance() {
+        let failures = vec![
+            ("RSSHub Official".to_string(), "status 429".to_string()),
+            ("RSSForever".to_string(), "timed out".to_string()),
+        ];
+        let message = format_fallback_error(&failures);
+        assert!(message.contains("RSSHub Official: status 429"));
+        assert!(message.contains("RSSForever: timed out"));
+        assert!(message.starts_with("All RSSHub instances failed"));
     }
 
     fn rsshub_config(instance_id: Option<&str>, allow_fallback: bool) -> RssHubSourceConfig {
