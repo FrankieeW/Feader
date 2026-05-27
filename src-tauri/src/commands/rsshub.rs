@@ -281,6 +281,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rsshub_source_config_defaults_allow_fallback_true() {
+        let config: crate::models::RssHubSourceConfig =
+            serde_json::from_str(r#"{"route":"/github/trending/daily/rust"}"#).unwrap();
+        assert!(config.allow_fallback);
+        assert!(config.instance_id.is_none());
+    }
+
+    #[test]
     fn rsshub_route_normalization_accepts_paths_and_full_urls() {
         assert_eq!(
             normalize_rsshub_route("github/trending/daily/rust").unwrap(),

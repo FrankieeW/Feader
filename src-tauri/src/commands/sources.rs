@@ -94,6 +94,7 @@ pub async fn add_rsshub_source(
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(|value| value.to_string()),
+        allow_fallback: true,
     };
     let source = database.add_rsshub_source(
         &route,
