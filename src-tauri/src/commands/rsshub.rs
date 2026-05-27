@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::db::AppDatabase;
 use crate::models::{
     AddRssHubInstanceRequest, RssHubInstance, RssHubInstanceCheck, RssHubSettings,
+    RssHubSourceConfig,
 };
 use crate::error::{FeaderError, Result};
 
@@ -121,6 +122,7 @@ fn load_rsshub_settings(database: &AppDatabase) -> Result<RssHubSettings> {
             order
                 .iter()
                 .position(|id| id == &instance.id)
+                // instances not in the saved order sort to the end, keeping their relative order
                 .unwrap_or(usize::MAX)
         });
     }
@@ -215,9 +217,9 @@ pub(crate) fn format_fallback_error(failures: &[(String, String)]) -> String {
 /// then the rest of the configured instances in priority order when fallback is allowed.
 pub(crate) fn resolve_rsshub_candidates(
     database: &AppDatabase,
-    config: &crate::models::RssHubSourceConfig,
+    config: &RssHubSourceConfig,
 ) -> Result<Vec<RssHubInstance>> {
-    let settings = load_rsshub_settings(database)?;
+    let mut settings = load_rsshub_settings(database)?;
     let primary_id = config
         .instance_id
         .as_deref()
@@ -225,25 +227,22 @@ pub(crate) fn resolve_rsshub_candidates(
         .unwrap_or(&settings.global_instance_id)
         .to_string();
 
-    let primary = settings
+    let primary_idx = settings
         .instances
         .iter()
-        .find(|instance| instance.id == primary_id)
-        .cloned()
+        .position(|instance| instance.id == primary_id)
         .ok_or_else(|| {
             FeaderError::Message(format!("RSSHub instance '{primary_id}' is not configured"))
         })?;
+    // `remove` (not `swap_remove`) keeps the remaining instances in priority order.
+    let primary = settings.instances.remove(primary_idx);
 
     if !config.allow_fallback {
         return Ok(vec![primary]);
     }
 
-    let mut candidates = vec![primary.clone()];
-    for instance in settings.instances {
-        if instance.id != primary.id {
-            candidates.push(instance);
-        }
-    }
+    let mut candidates = vec![primary];
+    candidates.extend(settings.instances);
     Ok(candidates)
 }
 
@@ -315,6 +314,13 @@ pub fn set_rsshub_instance_order(
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<RssHubSettings> {
     let mut settings = load_rsshub_settings(&database)?;
+    let known: std::collections::HashSet<&str> = settings
+        .instances
+        .iter()
+        .map(|instance| instance.id.as_str())
+        .collect();
+    let mut order = order;
+    order.retain(|id| known.contains(id.as_str()));
     settings.order = order;
     save_rsshub_settings(&database, &settings)?;
     load_rsshub_settings(&database)
@@ -346,7 +352,6 @@ pub async fn check_rsshub_instance(base_url: String) -> Result<RssHubInstanceChe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::RssHubSourceConfig;
 
     #[test]
     fn rsshub_source_config_defaults_allow_fallback_true() {

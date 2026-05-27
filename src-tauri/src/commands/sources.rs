@@ -332,6 +332,15 @@ pub fn set_rsshub_source_fallback(
     allow_fallback: bool,
     database: tauri::State<'_, AppDatabase>,
 ) -> Result<Source> {
+    apply_rsshub_source_fallback(&database, source_id, allow_fallback)
+}
+
+/// Core of `set_rsshub_source_fallback`, testable without a `tauri::State`.
+pub(crate) fn apply_rsshub_source_fallback(
+    database: &AppDatabase,
+    source_id: i64,
+    allow_fallback: bool,
+) -> Result<Source> {
     let source = database.get_source(source_id)?;
     if source.kind != SOURCE_KIND_RSSHUB {
         return Err("Fallback can only be changed for RSSHub sources".into());
@@ -443,6 +452,17 @@ mod tests {
     use crate::models::RssHubSourceConfig;
 
     #[test]
+    fn set_fallback_rejects_non_rsshub_source() {
+        let database = AppDatabase::in_memory().expect("db");
+        let source = database
+            .add_source("https://example.com/feed.xml", Some("Example"))
+            .expect("add rss");
+
+        let result = apply_rsshub_source_fallback(&database, source.id, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn set_fallback_updates_source_config() {
         let database = AppDatabase::in_memory().expect("db");
         let config = RssHubSourceConfig {
@@ -454,12 +474,9 @@ mod tests {
             .add_rsshub_source("/github/trending/daily/rust", Some("GH"), &config)
             .expect("add");
 
-        let updated = database
-            .update_rsshub_source_config(
-                source.id,
-                &RssHubSourceConfig { allow_fallback: false, ..config.clone() },
-            )
-            .expect("update");
+        let updated =
+            apply_rsshub_source_fallback(&database, source.id, false).expect("set fallback");
+        assert_eq!(updated.kind, SOURCE_KIND_RSSHUB);
 
         let stored: RssHubSourceConfig =
             serde_json::from_str(updated.config_json.as_deref().unwrap()).unwrap();
